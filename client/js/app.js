@@ -362,9 +362,34 @@ const App = (() => {
             appendChatMessage(data.from, data.message, data.scope);
         });
 
-        // Game
+        // Game state
         RoboSocket.on('GAME_STATE', (data) => {
+            gameState = data;
             showScreen('game');
+            renderBoard();
+            renderGameInfo();
+        });
+
+        RoboSocket.on('CARDS_DEALT', (data) => {
+            dealtCards = data.cards || [];
+            selectedCards = [];
+            blockedSlots = data.blockedSlots || 0;
+            renderCardHand();
+            toast(`Runde ${data.round}: ${dealtCards.length} Karten erhalten!`, 'info');
+        });
+
+        RoboSocket.on('PROGRAMMING_PHASE_START', (data) => {
+            if (data.status === 'submitted') {
+                toast(data.message || 'Programm eingereicht!', 'success');
+            }
+        });
+
+        RoboSocket.on('EXECUTION_STEP', (data) => {
+            if (data.robots) {
+                gameState.robots = data.robots;
+                renderBoard();
+            }
+            toast(`Schritt ${data.step} ausgeführt`, 'info');
         });
 
         RoboSocket.on('GAME_OVER', (data) => {
@@ -375,7 +400,6 @@ const App = (() => {
         // Errors
         RoboSocket.on('ERROR', (data) => {
             const msg = data.message || 'Unbekannter Fehler.';
-            // Show in auth screen if on login
             if (currentScreen === 'login') {
                 showAuthMessage(msg);
             } else {
@@ -383,13 +407,214 @@ const App = (() => {
             }
         });
 
-        // Reconnect: re-send lobby list request if in menu
+        // Reconnect
         RoboSocket.on('connected', () => {
             if (currentScreen === 'menu' && currentUser) {
-                // Re-login silently after reconnect is not possible,
-                // so return to login screen
+                // Re-login silently after reconnect is not possible
             }
         });
+    }
+
+    // ═══════════════════════════════════════════════════
+    // GAME STATE
+    // ═══════════════════════════════════════════════════
+
+    let gameState = null;
+    let dealtCards = [];
+    let selectedCards = [];
+    let blockedSlots = 0;
+
+    const TILE_SIZE = 48;
+    const ROBOT_COLORS = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c', '#e67e22', '#34495e'];
+    const TILE_COLORS = {
+        FLOOR: '#3d4f5f',
+        PIT: '#0d0d0d',
+        START: '#4a6741',
+        REPAIR_1: '#2e6b9e',
+        REPAIR_2: '#1e4d7e',
+        WALL: '#c0c0c0'
+    };
+
+    const CARD_ICONS = {
+        MOVE_1: '↑1', MOVE_2: '↑2', MOVE_3: '↑3',
+        BACKUP: '↓', TURN_LEFT: '↶', TURN_RIGHT: '↷', U_TURN: '↩'
+    };
+
+    function renderBoard() {
+        const canvas = document.getElementById('game-board-canvas');
+        if (!canvas || !gameState) return;
+        const ctx = canvas.getContext('2d');
+
+        const board = gameState.board || {};
+        const w = board.width || 12;
+        const h = board.height || 12;
+
+        canvas.width = w * TILE_SIZE;
+        canvas.height = h * TILE_SIZE;
+
+        // Draw tiles
+        const tiles = board.tiles || [];
+        for (const t of tiles) {
+            const px = t.x * TILE_SIZE;
+            const py = t.y * TILE_SIZE;
+
+            // Tile background
+            ctx.fillStyle = TILE_COLORS[t.type] || TILE_COLORS.FLOOR;
+            ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+
+            // Grid line
+            ctx.strokeStyle = '#2c3e50';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(px, py, TILE_SIZE, TILE_SIZE);
+
+            // Conveyor belt arrow
+            if (t.conveyorBelt) {
+                ctx.fillStyle = t.conveyorBelt.express ? '#f1c40f' : '#95a5a6';
+                ctx.font = '16px Inter';
+                ctx.textAlign = 'center';
+                const arrows = { NORTH: '▲', SOUTH: '▼', EAST: '▶', WEST: '◀' };
+                ctx.fillText(arrows[t.conveyorBelt.direction] || '•', px + TILE_SIZE / 2, py + TILE_SIZE / 2 + 5);
+            }
+
+            // Gear
+            if (t.gear) {
+                ctx.fillStyle = '#f39c12';
+                ctx.font = '18px Inter';
+                ctx.textAlign = 'center';
+                ctx.fillText(t.gear.rotation === 'CLOCKWISE' ? '⟳' : '⟲', px + TILE_SIZE / 2, py + TILE_SIZE / 2 + 6);
+            }
+
+            // Checkpoint
+            if (t.checkpoint) {
+                ctx.fillStyle = '#e74c3c';
+                ctx.font = 'bold 20px Inter';
+                ctx.textAlign = 'center';
+                ctx.fillText(t.checkpoint.number, px + TILE_SIZE / 2, py + TILE_SIZE / 2 + 7);
+            }
+
+            // Walls
+            if (t.walls && t.walls.length) {
+                ctx.strokeStyle = TILE_COLORS.WALL;
+                ctx.lineWidth = 3;
+                for (const wall of t.walls) {
+                    ctx.beginPath();
+                    if (wall === 'NORTH') { ctx.moveTo(px, py); ctx.lineTo(px + TILE_SIZE, py); }
+                    if (wall === 'SOUTH') { ctx.moveTo(px, py + TILE_SIZE); ctx.lineTo(px + TILE_SIZE, py + TILE_SIZE); }
+                    if (wall === 'WEST') { ctx.moveTo(px, py); ctx.lineTo(px, py + TILE_SIZE); }
+                    if (wall === 'EAST') { ctx.moveTo(px + TILE_SIZE, py); ctx.lineTo(px + TILE_SIZE, py + TILE_SIZE); }
+                    ctx.stroke();
+                }
+            }
+        }
+
+        // Draw lasers
+        const lasers = board.lasers || [];
+        for (const laser of lasers) {
+            ctx.strokeStyle = 'rgba(255, 0, 0, 0.4)';
+            ctx.lineWidth = laser.strength > 1 ? 3 : 1;
+            const lx = laser.x * TILE_SIZE + TILE_SIZE / 2;
+            const ly = laser.y * TILE_SIZE + TILE_SIZE / 2;
+            ctx.beginPath();
+            ctx.arc(lx, ly, 4, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+
+        // Draw robots
+        const robots = gameState.robots || [];
+        for (const robot of robots) {
+            if (robot.destroyed) continue;
+            const rx = robot.x * TILE_SIZE + TILE_SIZE / 2;
+            const ry = robot.y * TILE_SIZE + TILE_SIZE / 2;
+            const color = ROBOT_COLORS[robot.robotIndex % ROBOT_COLORS.length];
+
+            // Robot body
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(rx, ry, TILE_SIZE / 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // Direction indicator
+            const dirAngles = { NORTH: -Math.PI / 2, EAST: 0, SOUTH: Math.PI / 2, WEST: Math.PI };
+            const angle = dirAngles[robot.direction] || 0;
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.moveTo(rx + Math.cos(angle) * 14, ry + Math.sin(angle) * 14);
+            ctx.lineTo(rx + Math.cos(angle + 2.5) * 6, ry + Math.sin(angle + 2.5) * 6);
+            ctx.lineTo(rx + Math.cos(angle - 2.5) * 6, ry + Math.sin(angle - 2.5) * 6);
+            ctx.closePath();
+            ctx.fill();
+        }
+    }
+
+    function renderGameInfo() {
+        const panel = document.getElementById('game-info-panel');
+        if (!panel || !gameState) return;
+
+        const robots = gameState.robots || [];
+        let html = `<div class="game-phase-indicator"><strong>Phase:</strong> ${gameState.phase || '—'} | <strong>Runde:</strong> ${gameState.round || 1}</div>`;
+        html += '<div class="robot-status-list">';
+        for (const r of robots) {
+            const color = ROBOT_COLORS[r.robotIndex % ROBOT_COLORS.length];
+            html += `<div class="robot-status" style="border-left: 4px solid ${color}">
+                <span class="robot-name">Spieler ${r.playerId}</span>
+                <span>❤️ ${r.lives} | 💥 ${r.damage} | 🏁 CP${r.nextCheckpoint - 1}${r.destroyed ? ' | ☠️' : ''}</span>
+            </div>`;
+        }
+        html += '</div>';
+        panel.innerHTML = html;
+    }
+
+    function renderCardHand() {
+        const panel = document.getElementById('game-cards-panel');
+        if (!panel) return;
+
+        const needed = 5 - blockedSlots;
+        let html = `<h3>🎴 Deine Karten <small>(${selectedCards.length}/${needed} gewählt)</small></h3>`;
+        html += '<div class="card-hand">';
+        for (const card of dealtCards) {
+            const isSelected = selectedCards.includes(card.id);
+            const idx = selectedCards.indexOf(card.id);
+            html += `<div class="program-card ${isSelected ? 'selected' : ''}"
+                          onclick="App.toggleCard(${card.id})"
+                          title="${card.displayName} (Priorität: ${card.priority})">
+                <div class="card-icon">${CARD_ICONS[card.type] || '?'}</div>
+                <div class="card-name">${card.displayName}</div>
+                <div class="card-priority">${card.priority}</div>
+                ${isSelected ? '<div class="card-order">' + (idx + 1) + '</div>' : ''}
+            </div>`;
+        }
+        html += '</div>';
+
+        if (selectedCards.length === needed) {
+            html += '<button class="btn btn-primary btn-submit-program" onclick="App.submitProgram()">✅ Programm einreichen</button>';
+        }
+
+        panel.innerHTML = html;
+    }
+
+    function toggleCard(cardId) {
+        const needed = 5 - blockedSlots;
+        const idx = selectedCards.indexOf(cardId);
+        if (idx >= 0) {
+            selectedCards.splice(idx, 1);
+        } else if (selectedCards.length < needed) {
+            selectedCards.push(cardId);
+        }
+        renderCardHand();
+    }
+
+    function submitProgram() {
+        if (selectedCards.length !== 5 - blockedSlots) {
+            toast('Wähle erst die richtige Anzahl Karten!', 'error');
+            return;
+        }
+        RoboSocket.send('SUBMIT_PROGRAM', { cardIds: selectedCards });
+        dealtCards = [];
+        selectedCards = [];
+        renderCardHand();
     }
 
     // ═══════════════════════════════════════════════════
@@ -526,6 +751,8 @@ const App = (() => {
     return {
         joinLobby,
         toast,
-        showScreen
+        showScreen,
+        toggleCard,
+        submitProgram
     };
 })();

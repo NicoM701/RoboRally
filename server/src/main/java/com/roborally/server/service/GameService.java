@@ -24,6 +24,7 @@ public class GameService {
 
     private final CardService cardService;
     private final BoardLoader boardLoader;
+    private final MovementService movementService;
     private final LobbyService lobbyService;
     private final UserService userService;
     private final SessionManager sessionManager;
@@ -36,10 +37,11 @@ public class GameService {
     private final Map<String, ScheduledFuture<?>> timers = new ConcurrentHashMap<>();
 
     public GameService(CardService cardService, BoardLoader boardLoader,
-            LobbyService lobbyService, UserService userService,
-            SessionManager sessionManager) {
+            MovementService movementService, LobbyService lobbyService,
+            UserService userService, SessionManager sessionManager) {
         this.cardService = cardService;
         this.boardLoader = boardLoader;
+        this.movementService = movementService;
         this.lobbyService = lobbyService;
         this.userService = userService;
         this.sessionManager = sessionManager;
@@ -227,7 +229,7 @@ public class GameService {
     }
 
     // ══════════════════════════════════════════════════════
-    // Execution Phase (Sprint 4 - stub for now)
+    // Execution Phase
     // ══════════════════════════════════════════════════════
 
     private void startExecutionPhase(GameState game) {
@@ -235,9 +237,71 @@ public class GameService {
         log.info("All programs submitted. Starting execution phase for round {}", game.getRound());
         broadcastPhaseUpdate(game, "EXECUTING");
 
-        // Sprint 4: Execute 5 steps (card movement, factory elements, etc.)
-        // For now, just move to next round
+        // Execute 5 steps (registers)
+        for (int step = 0; step < 5; step++) {
+            if (game.getActiveRobots().isEmpty())
+                break;
+
+            List<Map<String, Object>> stepResults = movementService.executeStep(game, step);
+
+            // Check for checkpoint advancement
+            checkCheckpoints(game);
+
+            // Respawn destroyed robots that have lives left
+            respawnDestroyedRobots(game);
+
+            // Broadcast step result for client animation
+            broadcastToGame(game, Message.of(MessageType.EXECUTION_STEP, Map.of(
+                    "step", step + 1,
+                    "results", stepResults,
+                    "robots", getRobotStates(game))));
+
+            log.debug("Step {} executed: {} movements", step + 1, stepResults.size());
+        }
+
         performCleanupPhase(game);
+    }
+
+    /**
+     * Check if any robots reached their next checkpoint.
+     */
+    private void checkCheckpoints(GameState game) {
+        for (Robot robot : game.getActiveRobots()) {
+            Tile tile = game.getBoard().getTile(robot.getX(), robot.getY());
+            if (tile != null && tile.getCheckpoint() != null) {
+                int cpNumber = tile.getCheckpoint().getNumber();
+                if (cpNumber == robot.getNextCheckpoint()) {
+                    robot.advanceCheckpoint();
+                    robot.setArchive(robot.getX(), robot.getY());
+                    log.info("Robot {} reached checkpoint {}", robot.getPlayerId(), cpNumber);
+                }
+            }
+        }
+    }
+
+    /**
+     * Respawn destroyed robots that still have lives.
+     */
+    private void respawnDestroyedRobots(GameState game) {
+        for (Robot robot : game.getRobots().values()) {
+            if (robot.isDestroyed() && robot.isAlive()) {
+                robot.loseLife();
+                if (robot.isAlive()) {
+                    robot.respawn(robot.getArchiveX(), robot.getArchiveY(), Direction.NORTH);
+                    log.info("Robot {} respawned at archive ({},{}) with {} lives",
+                            robot.getPlayerId(), robot.getArchiveX(), robot.getArchiveY(), robot.getLives());
+                } else {
+                    log.info("Robot {} permanently destroyed (no lives left)", robot.getPlayerId());
+                }
+            }
+        }
+    }
+
+    /**
+     * Get current robot states for broadcasting.
+     */
+    private List<Map<String, Object>> getRobotStates(GameState game) {
+        return game.getRobots().values().stream().map(Robot::toMap).toList();
     }
 
     private void performCleanupPhase(GameState game) {
