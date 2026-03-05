@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="RoboRally - Online Multiplayer Brettspiel">
+    <title>RoboRally Online</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <!-- CONNECTION STATUS BAR -->
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <div id="connection-bar" class="connection-bar disconnected">
+        <span id="connection-status-text">Verbindung wird hergestellt...</span>
+        <div class="connection-dot"></div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <!-- SCREEN: LOGIN -->
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <div id="screen-login" class="screen active">
+        <div class="login-container">
+            <div class="login-header">
+                <h1 class="logo-text">ROBO<span class="logo-accent">RALLY</span></h1>
+                <p class="login-subtitle">Programmiere deinen Roboter. Dominiere die Fabrik.</p>
+            </div>
+
+            <!-- Login Form -->
+            <div id="login-form" class="auth-form active">
+                <div class="form-group">
+                    <label for="login-username">Username</label>
+                    <input type="text" id="login-username" placeholder="Dein Username" autocomplete="username">
+                </div>
+                <div class="form-group">
+                    <label for="login-password">Passwort</label>
+                    <input type="password" id="login-password" placeholder="Dein Passwort" autocomplete="current-password">
+                </div>
+                <button id="btn-login" class="btn btn-primary">Einloggen</button>
+                <div class="form-divider"><span>oder</span></div>
+                <button id="btn-guest" class="btn btn-secondary">Als Gast spielen</button>
+                <p class="form-switch">Noch kein Account? <a href="#" id="show-register">Registrieren</a></p>
+            </div>
+
+            <!-- Register Form -->
+            <div id="register-form" class="auth-form">
+                <div class="form-group">
+                    <label for="reg-username">Username</label>
+                    <input type="text" id="reg-username" placeholder="Wähle einen Username" autocomplete="username">
+                </div>
+                <div class="form-group">
+                    <label for="reg-email">Email</label>
+                    <input type="email" id="reg-email" placeholder="deine@email.de" autocomplete="email">
+                </div>
+                <div class="form-group">
+                    <label for="reg-password">Passwort</label>
+                    <input type="password" id="reg-password" placeholder="Sicheres Passwort" autocomplete="new-password">
+                </div>
+                <div class="form-group">
+                    <label for="reg-password-confirm">Passwort bestätigen</label>
+                    <input type="password" id="reg-password-confirm" placeholder="Passwort wiederholen" autocomplete="new-password">
+                </div>
+                <button id="btn-register" class="btn btn-primary">Registrieren</button>
+                <p class="form-switch">Bereits registriert? <a href="#" id="show-login">Einloggen</a></p>
+            </div>
+
+            <!-- Error/Success Messages -->
+            <div id="auth-message" class="auth-message hidden"></div>
+        </div>
+
+        <!-- Animated background robots -->
+        <div class="bg-robots">
+            <div class="bg-robot bg-robot-1">🤖</div>
+            <div class="bg-robot bg-robot-2">🤖</div>
+            <div class="bg-robot bg-robot-3">🤖</div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <!-- SCREEN: MAIN MENU (Lobby List) -->
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <div id="screen-menu" class="screen">
+        <header class="menu-header">
+            <h1 class="logo-text logo-small">ROBO<span class="logo-accent">RALLY</span></h1>
+            <div class="user-info">
+                <span id="menu-username" class="username-display"></span>
+                <button id="btn-settings" class="btn btn-icon" title="Einstellungen">⚙️</button>
+                <button id="btn-logout" class="btn btn-icon" title="Ausloggen">🚪</button>
+            </div>
+        </header>
+
+        <div class="menu-content">
+            <div class="menu-main">
+                <div class="lobby-section">
+                    <div class="section-header">
+                        <h2>Lobbys</h2>
+                        <button id="btn-create-lobby" class="btn btn-primary btn-small">+ Neue Lobby</button>
+                    </div>
+                    <div id="lobby-list" class="lobby-list">
+                        <div class="empty-state">
+                            <p>🏭 Noch keine Lobbys vorhanden.</p>
+                            <p>Erstelle eine neue Lobby und lade Freunde ein!</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main Menu Chat -->
+            <div class="chat-panel" id="main-chat-panel">
+                <div class="chat-header">
+                    <h3>💬 Global Chat</h3>
+                </div>
+                <div id="main-chat-messages" class="chat-messages"></div>
+                <div class="chat-input-area">
+                    <input type="text" id="main-chat-input" placeholder="Nachricht..." autocomplete="off">
+                    <button id="btn-main-chat-send" class="btn btn-send">➤</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Create Lobby Modal -->
+        <div id="modal-create-lobby" class="modal hidden">
+            <div class="modal-content">
+                <h2>Neue Lobby erstellen</h2>
+                <div class="form-group">
+                    <label for="lobby-name">Lobby-Name</label>
+                    <input type="text" id="lobby-name" placeholder="Meine Lobby">
+                </div>
+                <div class="form-group">
+                    <label for="lobby-password">Passwort (optional)</label>
+                    <input type="password" id="lobby-password" placeholder="Kein Passwort">
+                </div>
+                <div class="form-group">
+                    <label for="lobby-max-players">Max. Spieler</label>
+                    <select id="lobby-max-players">
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="4" selected>4</option>
+                        <option value="5">5</option>
+                        <option value="6">6</option>
+                        <option value="7">7</option>
+                        <option value="8">8</option>
+                    </select>
+                </div>
+                <div class="modal-actions">
+                    <button id="btn-confirm-create-lobby" class="btn btn-primary">Erstellen</button>
+                    <button id="btn-cancel-create-lobby" class="btn btn-secondary">Abbrechen</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- User Settings Modal -->
+        <div id="modal-settings" class="modal hidden">
+            <div class="modal-content">
+                <h2>⚙️ Einstellungen</h2>
+                <div id="settings-guest-warning" class="warning-box hidden">
+                    Gäste können keine Daten ändern.
+                </div>
+                <div class="form-group">
+                    <label for="settings-username">Neuer Username</label>
+                    <input type="text" id="settings-username" placeholder="Neuer Username">
+                </div>
+                <div class="form-group">
+                    <label for="settings-email">Neue Email</label>
+                    <input type="email" id="settings-email" placeholder="Neue Email">
+                </div>
+                <div class="form-group">
+                    <label for="settings-new-password">Neues Passwort</label>
+                    <input type="password" id="settings-new-password" placeholder="Neues Passwort">
+                </div>
+                <div class="form-group">
+                    <label for="settings-current-password">Aktuelles Passwort (zur Bestätigung)</label>
+                    <input type="password" id="settings-current-password" placeholder="Aktuelles Passwort">
+                </div>
+                <div class="modal-actions">
+                    <button id="btn-save-settings" class="btn btn-primary">Speichern</button>
+                    <button id="btn-delete-account" class="btn btn-danger">Account löschen</button>
+                    <button id="btn-cancel-settings" class="btn btn-secondary">Abbrechen</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <!-- SCREEN: LOBBY ROOM -->
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <div id="screen-lobby" class="screen">
+        <header class="lobby-header">
+            <button id="btn-leave-lobby" class="btn btn-icon" title="Lobby verlassen">← Zurück</button>
+            <h2 id="lobby-room-name" class="lobby-room-title">Lobby</h2>
+            <div class="lobby-room-actions">
+                <button id="btn-add-bot" class="btn btn-small btn-secondary">🤖 Bot hinzufügen</button>
+                <button id="btn-start-game" class="btn btn-small btn-primary hidden">🎮 Spiel starten</button>
+            </div>
+        </header>
+
+        <div class="lobby-room-content">
+            <!-- Player List -->
+            <div class="lobby-players-section">
+                <h3>Spieler</h3>
+                <div id="lobby-player-list" class="player-list"></div>
+            </div>
+
+            <!-- Game Settings (host only) -->
+            <div class="lobby-settings-section">
+                <h3>Spieleinstellungen</h3>
+                <div class="form-group">
+                    <label for="game-board-select">Spielbrett</label>
+                    <select id="game-board-select">
+                        <option value="map1">Map 1</option>
+                        <option value="map2">Map 2</option>
+                        <option value="map3">Map 3</option>
+                        <option value="map4">Map 4</option>
+                        <option value="map5">Map 5</option>
+                        <option value="map6">Map 6</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="game-checkpoints">Checkpoints</label>
+                    <select id="game-checkpoints">
+                        <option value="2">2</option>
+                        <option value="3" selected>3</option>
+                        <option value="4">4</option>
+                        <option value="5">5</option>
+                        <option value="6">6</option>
+                    </select>
+                </div>
+                <div class="form-group checkbox-group">
+                    <label><input type="checkbox" id="game-robot-lasers" checked> Roboter-Laser</label>
+                    <label><input type="checkbox" id="game-shutdown"> Abschalten erlaubt</label>
+                </div>
+            </div>
+
+            <!-- Lobby Chat -->
+            <div class="chat-panel" id="lobby-chat-panel">
+                <div class="chat-header">
+                    <h3>💬 Lobby Chat</h3>
+                </div>
+                <div id="lobby-chat-messages" class="chat-messages"></div>
+                <div class="chat-input-area">
+                    <input type="text" id="lobby-chat-input" placeholder="Nachricht..." autocomplete="off">
+                    <button id="btn-lobby-chat-send" class="btn btn-send">➤</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <!-- SCREEN: GAME (Placeholder for Sprint 3+) -->
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <div id="screen-game" class="screen">
+        <div class="game-container">
+            <canvas id="game-board-canvas"></canvas>
+            <div id="game-sidebar">
+                <div id="game-info-panel"></div>
+                <div id="game-cards-panel"></div>
+                <div id="game-chat-panel" class="chat-panel">
+                    <div id="game-chat-messages" class="chat-messages"></div>
+                    <div class="chat-input-area">
+                        <input type="text" id="game-chat-input" placeholder="Nachricht..." autocomplete="off">
+                        <button id="btn-game-chat-send" class="btn btn-send">➤</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <!-- SCREEN: END (Placeholder for Sprint 6) -->
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <div id="screen-end" class="screen">
+        <div class="end-container">
+            <h1 id="end-title">🏆 Spiel vorbei!</h1>
+            <div id="end-winner"></div>
+            <button id="btn-back-to-menu" class="btn btn-primary">Zurück zum Menü</button>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Scripts -->
+    <script src="js/websocket.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
