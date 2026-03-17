@@ -240,20 +240,170 @@ public class MovementService {
             executeCard(game, robot, card);
 
             // Record result for animation
-            Map<String, Object> result = new LinkedHashMap<>();
-            result.put("playerId", robot.getPlayerId());
-            result.put("cardType", card.getType().name());
-            result.put("priority", card.getPriority());
-            result.put("fromX", prevX);
-            result.put("fromY", prevY);
-            result.put("fromDir", prevDir.name());
-            result.put("toX", robot.getX());
-            result.put("toY", robot.getY());
-            result.put("toDir", robot.getDirection().name());
-            result.put("destroyed", robot.isDestroyed());
-            results.add(result);
+            recordResult(card.getType().name(), robot, card.getPriority(), prevX, prevY, prevDir, results);
         }
 
+        // ─── Process Board Elements at the end of the registry ───
+        processBoardElements(game, stepNumber, results);
+
         return results;
+    }
+
+    // ══════════════════════════════════════════════════════
+    // Board Elements Execution
+    // ══════════════════════════════════════════════════════
+
+    private void recordResult(String type, Robot r, int priority, int fromX, int fromY, Direction fromDir, List<Map<String, Object>> results) {
+        Map<String, Object> res = new LinkedHashMap<>();
+        res.put("playerId", r.getPlayerId());
+        res.put("cardType", type);
+        res.put("priority", priority);
+        res.put("fromX", fromX);
+        res.put("fromY", fromY);
+        res.put("fromDir", fromDir.name());
+        res.put("toX", r.getX());
+        res.put("toY", r.getY());
+        res.put("toDir", r.getDirection().name());
+        res.put("destroyed", r.isDestroyed());
+        results.add(res);
+    }
+
+    private List<Robot> getMovableRobots(GameState game) {
+        return game.getActiveRobots().stream().filter(r -> !r.isDestroyed()).toList();
+    }
+
+    private void processBoardElements(GameState game, int stepNumber, List<Map<String, Object>> results) {
+        processExpressBelts(game, results);
+        processAllBelts(game, results);
+        processPushers(game, stepNumber, results);
+        processGears(game, results);
+        processLasers(game, results);
+    }
+
+    private void processExpressBelts(GameState game, List<Map<String, Object>> results) {
+        processBelts(game, true, results);
+    }
+
+    private void processAllBelts(GameState game, List<Map<String, Object>> results) {
+        processBelts(game, false, results);
+    }
+
+    private void processBelts(GameState game, boolean expressOnly, List<Map<String, Object>> results) {
+        Board board = game.getBoard();
+        List<Robot> robotsToMove = getMovableRobots(game);
+        
+        Map<Robot, com.roborally.server.model.ConveyorBelt> movements = new HashMap<>();
+        for (Robot r : robotsToMove) {
+            Tile tile = board.getTile(r.getX(), r.getY());
+            if (tile != null && tile.getConveyorBelt() != null) {
+                com.roborally.server.model.ConveyorBelt belt = tile.getConveyorBelt();
+                if (!expressOnly || belt.isExpress()) {
+                    movements.put(r, belt);
+                }
+            }
+        }
+
+        // Technically we execute belt moves together so chains don't get messy, but moving one step mostly works.
+        for (Robot r : movements.keySet()) {
+            if (r.isDestroyed()) continue;
+            com.roborally.server.model.ConveyorBelt belt = movements.get(r);
+            int prevX = r.getX();
+            int prevY = r.getY();
+            Direction prevDir = r.getDirection();
+            
+            boolean moved = moveOneStep(game, r, belt.getDirection());
+            if (moved) {
+                Tile newTile = board.getTile(r.getX(), r.getY());
+                if (newTile != null && newTile.getConveyorBelt() != null) {
+                    com.roborally.common.enums.RotationDirection rot = newTile.getConveyorBelt().getCurveRotation();
+                    if (rot == com.roborally.common.enums.RotationDirection.CLOCKWISE) {
+                        r.setDirection(r.getDirection().rotateClockwise());
+                    } else if (rot == com.roborally.common.enums.RotationDirection.COUNTERCLOCKWISE) {
+                        r.setDirection(r.getDirection().rotateCounterClockwise());
+                    }
+                }
+                recordResult("BELT", r, 0, prevX, prevY, prevDir, results);
+            }
+        }
+    }
+
+    private void processPushers(GameState game, int stepNumber, List<Map<String, Object>> results) {
+        Board board = game.getBoard();
+        for (Robot r : getMovableRobots(game)) {
+            Tile tile = board.getTile(r.getX(), r.getY());
+            if (tile != null && tile.getPusher() != null) {
+                com.roborally.server.model.Pusher pusher = tile.getPusher();
+                if (pusher.isActiveOnStep(stepNumber + 1)) {
+                    int prevX = r.getX();
+                    int prevY = r.getY();
+                    Direction prevDir = r.getDirection();
+                    boolean moved = pushRobot(game, r, pusher.getPushDirection());
+                    if (moved) {
+                        recordResult("PUSHER", r, 0, prevX, prevY, prevDir, results);
+                    }
+                }
+            }
+        }
+    }
+
+    private void processGears(GameState game, List<Map<String, Object>> results) {
+        Board board = game.getBoard();
+        for (Robot r : getMovableRobots(game)) {
+            Tile tile = board.getTile(r.getX(), r.getY());
+            if (tile != null && tile.getGear() != null) {
+                com.roborally.server.model.Gear gear = tile.getGear();
+                int prevX = r.getX();
+                int prevY = r.getY();
+                Direction prevDir = r.getDirection();
+                
+                if (gear.getRotation() == com.roborally.common.enums.RotationDirection.CLOCKWISE) {
+                    r.setDirection(r.getDirection().rotateClockwise());
+                } else {
+                    r.setDirection(r.getDirection().rotateCounterClockwise());
+                }
+                recordResult("GEAR", r, 0, prevX, prevY, prevDir, results);
+            }
+        }
+    }
+
+    private void processLasers(GameState game, List<Map<String, Object>> results) {
+        Board board = game.getBoard();
+        
+        for (com.roborally.server.model.Laser laser : board.getLasers()) {
+            traceLaser(game, laser.getX(), laser.getY(), laser.getDirection(), laser.getStrength(), results, false);
+        }
+        
+        for (Robot r : getMovableRobots(game)) {
+            traceLaser(game, r.getX(), r.getY(), r.getDirection(), 1, results, true);
+        }
+    }
+
+    private void traceLaser(GameState game, int startX, int startY, Direction dir, int strength, List<Map<String, Object>> results, boolean isRobotLaser) {
+        Board board = game.getBoard();
+        int currX = startX;
+        int currY = startY;
+        
+        while (board.isInBounds(currX, currY)) {
+            if (isWallBlocking(board, currX, currY, dir)) {
+                break;
+            }
+            
+            currX += dir.dx();
+            currY += dir.dy();
+            
+            Robot hit = getRobotAt(game, currX, currY);
+            if (hit != null && !hit.isDestroyed()) {
+                hit.addDamage(strength);
+                if (hit.getDamage() >= 10) { 
+                    hit.destroy();
+                }
+                
+                int prevX = hit.getX();
+                int prevY = hit.getY();
+                Direction prevDir = hit.getDirection();
+                recordResult(isRobotLaser ? "ROBOT_LASER" : "BOARD_LASER", hit, 0, prevX, prevY, prevDir, results);
+                break;
+            }
+        }
     }
 }

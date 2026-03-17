@@ -484,6 +484,27 @@ const App = (() => {
                 ctx.fillText(t.gear.rotation === 'CLOCKWISE' ? '⟳' : '⟲', px + TILE_SIZE / 2, py + TILE_SIZE / 2 + 6);
             }
 
+            // Pusher
+            if (t.pusher) {
+                ctx.fillStyle = '#8e44ad';
+                ctx.fillRect(px + TILE_SIZE - 12, py + TILE_SIZE - 12, 12, 12);
+                ctx.fillStyle = '#fff';
+                ctx.font = '12px Inter';
+                ctx.textAlign = 'center';
+                const arrows = { NORTH: '▲', SOUTH: '▼', EAST: '▶', WEST: '◀' };
+                ctx.fillText(arrows[t.pusher.direction] || 'P', px + TILE_SIZE - 6, py + TILE_SIZE - 2);
+            }
+
+            // Press
+            if (t.press) {
+                ctx.fillStyle = '#c0392b';
+                ctx.fillRect(px + TILE_SIZE / 2 - 8, py + TILE_SIZE / 2 - 8, 16, 16);
+                ctx.fillStyle = '#fff';
+                ctx.font = '10px Inter';
+                ctx.textAlign = 'center';
+                ctx.fillText('⚡', px + TILE_SIZE / 2, py + TILE_SIZE / 2 + 4);
+            }
+
             // Checkpoint
             if (t.checkpoint) {
                 ctx.fillStyle = '#e74c3c';

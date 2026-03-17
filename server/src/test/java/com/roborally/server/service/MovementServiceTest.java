@@ -368,4 +368,112 @@ class MovementServiceTest {
         service.checkDestruction(game, r);
         assertFalse(r.isDestroyed());
     }
+
+    // ═══════════════════════════════════════
+    // Board Elements Execution
+    // ═══════════════════════════════════════
+
+    @Test
+    void executeStep_conveyorBelt_movesRobot() {
+        Robot r1 = new Robot(1L, 0, 5, 5, Direction.NORTH);
+        game.addRobot(1L, r1);
+        r1.setSlot(0, new ProgramCard(1, CardType.MOVE_1, 100));
+        
+        board.getTile(5, 4).setConveyorBelt(new ConveyorBelt(Direction.EAST, false));
+        
+        List<Map<String, Object>> results = service.executeStep(game, 0);
+        
+        assertEquals(6, r1.getX());
+        assertEquals(4, r1.getY());
+        assertTrue(results.stream().anyMatch(map -> "BELT".equals(map.get("cardType"))));
+    }
+    
+    @Test
+    void executeStep_expressBelt_movesRobotTwice() {
+        Robot r1 = new Robot(1L, 0, 5, 5, Direction.NORTH);
+        game.addRobot(1L, r1);
+        r1.setSlot(0, new ProgramCard(1, CardType.MOVE_1, 100));
+        
+        board.getTile(5, 4).setConveyorBelt(new ConveyorBelt(Direction.EAST, true));
+        board.getTile(6, 4).setConveyorBelt(new ConveyorBelt(Direction.EAST, true));
+        
+        service.executeStep(game, 0);
+        
+        assertEquals(7, r1.getX());
+        assertEquals(4, r1.getY());
+    }
+
+    @Test
+    void executeStep_gear_rotatesRobot() {
+        Robot r1 = new Robot(1L, 0, 5, 5, Direction.NORTH);
+        game.addRobot(1L, r1);
+        r1.setSlot(0, new ProgramCard(1, CardType.MOVE_1, 100));
+        
+        board.getTile(5, 4).setGear(new Gear(com.roborally.common.enums.RotationDirection.CLOCKWISE));
+        
+        service.executeStep(game, 0);
+        
+        assertEquals(5, r1.getX());
+        assertEquals(4, r1.getY());
+        assertEquals(Direction.EAST, r1.getDirection()); // North -> Clockwise = East
+    }
+    
+    @Test
+    void executeStep_pusher_pushesRobot() {
+        Robot r1 = new Robot(1L, 0, 5, 5, Direction.NORTH);
+        game.addRobot(1L, r1);
+        r1.setSlot(0, new ProgramCard(1, CardType.MOVE_1, 100));
+        
+        board.getTile(5, 4).setPusher(new Pusher(Direction.WEST, java.util.Set.of(1)));
+        
+        // step 0 is register 1, so pusher pushes WEST to 4,4
+        service.executeStep(game, 0);
+        
+        assertEquals(4, r1.getX());
+        assertEquals(4, r1.getY());
+    }
+    
+    @Test
+    void executeStep_pusher_inactiveStep() {
+        Robot r1 = new Robot(1L, 0, 5, 5, Direction.NORTH);
+        game.addRobot(1L, r1);
+        r1.setSlot(0, new ProgramCard(1, CardType.MOVE_1, 100));
+        
+        board.getTile(5, 4).setPusher(new Pusher(Direction.WEST, java.util.Set.of(2)));
+        
+        // step 0 = register 1. Pusher active on 2. Should NOT push.
+        service.executeStep(game, 0);
+        
+        assertEquals(5, r1.getX());
+        assertEquals(4, r1.getY());
+    }
+    
+    @Test
+    void executeStep_boardLaser_damagesRobot() {
+        Robot r1 = new Robot(1L, 0, 5, 5, Direction.NORTH);
+        game.addRobot(1L, r1);
+        r1.setSlot(0, new ProgramCard(1, CardType.MOVE_1, 100));
+        
+        board.addLaser(new com.roborally.server.model.Laser(0, 4, Direction.EAST, 2));
+        
+        service.executeStep(game, 0);
+        
+        assertEquals(2, r1.getDamage());
+    }
+    
+    @Test
+    void executeStep_robotLaser_damagesOtherRobot() {
+        Robot r1 = new Robot(1L, 0, 5, 5, Direction.NORTH);
+        Robot r2 = new Robot(2L, 1, 5, 2, Direction.SOUTH);
+        game.addRobot(1L, r1);
+        game.addRobot(2L, r2);
+        
+        r1.setSlot(0, new ProgramCard(1, CardType.MOVE_1, 100)); // r1 to 5,4 facing North
+        r2.setSlot(0, new ProgramCard(2, CardType.TURN_RIGHT, 200)); // r2 to 5,2 facing West
+        
+        service.executeStep(game, 0);
+        
+        assertEquals(1, r2.getDamage());
+        assertEquals(0, r1.getDamage()); // r2 shoots West, doesn't hit r1
+    }
 }
