@@ -6,6 +6,7 @@ const App = (() => {
     // ─── State ──────────────────────────────────────────
     let currentUser = null;   // { userId, username, isGuest }
     let currentScreen = 'login';
+    let availableBoards = [];
 
     // ─── Initialization ─────────────────────────────────
 
@@ -243,6 +244,16 @@ const App = (() => {
         document.getElementById('btn-add-bot').addEventListener('click', () => {
             RoboSocket.send('ADD_BOT', {});
         });
+
+        document.getElementById('game-board-select').addEventListener('change', (e) => {
+            const boardName = e.target.value;
+            renderMapPreview(boardName);
+            RoboSocket.send('UPDATE_GAME_SETTINGS', { settings: { boardName } });
+        });
+
+        document.getElementById('game-checkpoints').addEventListener('change', (e) => {
+            RoboSocket.send('UPDATE_GAME_SETTINGS', { settings: { checkpoints: parseInt(e.target.value) } });
+        });
     }
 
     // ═══════════════════════════════════════════════════
@@ -295,6 +306,7 @@ const App = (() => {
 
             // Request lobby list
             RoboSocket.send('REQUEST_LOBBY_LIST', {});
+            RoboSocket.send('REQUEST_AVAILABLE_BOARDS', {});
         });
 
         RoboSocket.on('LOGIN_FAILED', (data) => {
@@ -364,7 +376,11 @@ const App = (() => {
 
         // Game state
         RoboSocket.on('GAME_STATE', (data) => {
-            gameState = data;
+            if (!gameState) {
+                gameState = data;
+            } else {
+                Object.assign(gameState, data);
+            }
             showScreen('game');
             renderBoard();
             renderGameInfo();
@@ -405,6 +421,13 @@ const App = (() => {
             } else {
                 toast(msg, 'error');
             }
+            // Request settings again if an update failed (e.g., spawn size error)
+            RoboSocket.send('REQUEST_LOBBY_LIST', {});
+        });
+
+        RoboSocket.on('AVAILABLE_BOARDS', (data) => {
+            availableBoards = data.boards || [];
+            updateMapSelects();
         });
 
         // Reconnect
@@ -430,10 +453,75 @@ const App = (() => {
         FLOOR: '#3d4f5f',
         PIT: '#0d0d0d',
         START: '#4a6741',
-        REPAIR_1: '#2e6b9e',
-        REPAIR_2: '#1e4d7e',
         WALL: '#c0c0c0'
     };
+
+    const ASSETS = {};
+    function getAsset(src) {
+        if (!src) return null;
+        if (!ASSETS[src]) {
+            const img = new Image();
+            img.src = src;
+            img.onload = () => {
+                if (currentScreen === 'game') renderBoard();
+                else updateMapSelects();
+            };
+            ASSETS[src] = img;
+            return null;
+        }
+        return ASSETS[src].complete && ASSETS[src].naturalWidth > 0 ? ASSETS[src] : null;
+    }
+
+    function getTileLayerPaths(t) {
+        if (t.type === 'PIT') return ['/assets/fields/PIT_TOP.png'];
+        const layers = ['/assets/fields/DEFAULT_TOP.png'];
+        if (t.type === 'START') layers.push('/assets/fields/START_TOP.png');
+        if (t.type === 'REPAIR_1') layers.push('/assets/fields/REPAIR_TOP.png');
+        if (t.type === 'REPAIR_2') layers.push('/assets/fields/REPAIR_TWICE_TOP.png');
+        
+        let dirMap = { NORTH: 'TOP', SOUTH: 'BOTTOM', EAST: 'RIGHT', WEST: 'LEFT' };
+        
+        if (t.conveyorBelt) {
+            const pre = t.conveyorBelt.express ? 'EXPRESS_BELT_' : 'CONVEYOR_BELT_';
+            let dir = dirMap[t.conveyorBelt.direction] || 'TOP';
+            
+            if (t.conveyorBelt.curveRotation) {
+                const curveMap = { LEFT: 'LEFT_', RIGHT: 'RIGHT_' };
+                const cDir = curveMap[t.conveyorBelt.curveRotation];
+                layers.push(`/assets/fields/${pre}CURVE_${cDir}${dir}.png`);
+            } else if (t.conveyorBelt.crossing) {
+                layers.push(`/assets/fields/${pre}CROSSING_LEFTRIGHT_${dir}.png`);
+            } else {
+                layers.push(`/assets/fields/${pre}${dir}.png`);
+            }
+        }
+        if (t.gear) {
+            layers.push(t.gear.rotation === 'CLOCKWISE' ? '/assets/fields/CLOCKWISE_TURN_TOP.png' : '/assets/fields/COUNTER_CLOCKWISE_TURN_TOP.png');
+        }
+        if (t.pusher) {
+            layers.push(`/assets/fields/PUSHER_1_CONTRACTED_${dirMap[t.pusher.direction] || 'TOP'}.png`);
+        }
+        if (t.press) {
+            layers.push('/assets/fields/PRESS_OPEN_TOP.png');
+        }
+        if (t.checkpoint) {
+            let num = Math.min(t.checkpoint.number, 6);
+            layers.push(`/assets/fields/CHECKPOINT_${num}_TOP.png`);
+        }
+        if (t.walls && t.walls.length > 0) {
+            for (const wall of t.walls) {
+                layers.push(`/assets/overlays/WALL_${dirMap[wall] || 'TOP'}.png`);
+            }
+        }
+        return layers;
+    }
+
+    function getRobotImagePath(robot) {
+        const colors = ['BLUE', 'GREEN', 'GREY', 'ORANGE', 'PINK', 'PURPLE', 'RED', 'YELLOW'];
+        const color = colors[robot.robotIndex % colors.length];
+        const dirMap = { NORTH: 'TOP', SOUTH: 'BOTTOM', EAST: 'RIGHT', WEST: 'LEFT' };
+        return `/assets/robots/${color}ROBOT_${dirMap[robot.direction] || 'TOP'}.png`;
+    }
 
     const CARD_ICONS = {
         MOVE_1: '↑1', MOVE_2: '↑2', MOVE_3: '↑3',
@@ -452,121 +540,111 @@ const App = (() => {
         canvas.width = w * TILE_SIZE;
         canvas.height = h * TILE_SIZE;
 
-        // Draw tiles
+        const defaultFloor = getAsset('/assets/fields/DEFAULT_TOP.png');
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                const px = x * TILE_SIZE;
+                const py = y * TILE_SIZE;
+                if (defaultFloor) {
+                    ctx.drawImage(defaultFloor, px, py, TILE_SIZE, TILE_SIZE);
+                } else {
+                    ctx.fillStyle = TILE_COLORS.FLOOR;
+                    ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+                }
+            }
+        }
+
         const tiles = board.tiles || [];
         for (const t of tiles) {
             const px = t.x * TILE_SIZE;
             const py = t.y * TILE_SIZE;
 
-            // Tile background
-            ctx.fillStyle = TILE_COLORS[t.type] || TILE_COLORS.FLOOR;
-            ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-
-            // Grid line
-            ctx.strokeStyle = '#2c3e50';
-            ctx.lineWidth = 1;
-            ctx.strokeRect(px, py, TILE_SIZE, TILE_SIZE);
-
-            // Conveyor belt arrow
-            if (t.conveyorBelt) {
-                ctx.fillStyle = t.conveyorBelt.express ? '#f1c40f' : '#95a5a6';
-                ctx.font = '16px Inter';
-                ctx.textAlign = 'center';
-                const arrows = { NORTH: '▲', SOUTH: '▼', EAST: '▶', WEST: '◀' };
-                ctx.fillText(arrows[t.conveyorBelt.direction] || '•', px + TILE_SIZE / 2, py + TILE_SIZE / 2 + 5);
+            const layers = getTileLayerPaths(t);
+            for (const layer of layers) {
+                const img = getAsset(layer);
+                if (img) ctx.drawImage(img, px, py, TILE_SIZE, TILE_SIZE);
             }
 
-            // Gear
-            if (t.gear) {
-                ctx.fillStyle = '#f39c12';
-                ctx.font = '18px Inter';
-                ctx.textAlign = 'center';
-                ctx.fillText(t.gear.rotation === 'CLOCKWISE' ? '⟳' : '⟲', px + TILE_SIZE / 2, py + TILE_SIZE / 2 + 6);
-            }
+        }
 
-            // Pusher
-            if (t.pusher) {
-                ctx.fillStyle = '#8e44ad';
-                ctx.fillRect(px + TILE_SIZE - 12, py + TILE_SIZE - 12, 12, 12);
-                ctx.fillStyle = '#fff';
-                ctx.font = '12px Inter';
-                ctx.textAlign = 'center';
-                const arrows = { NORTH: '▲', SOUTH: '▼', EAST: '▶', WEST: '◀' };
-                ctx.fillText(arrows[t.pusher.direction] || 'P', px + TILE_SIZE - 6, py + TILE_SIZE - 2);
-            }
+        const robots = gameState.robots || [];
 
-            // Press
-            if (t.press) {
-                ctx.fillStyle = '#c0392b';
-                ctx.fillRect(px + TILE_SIZE / 2 - 8, py + TILE_SIZE / 2 - 8, 16, 16);
-                ctx.fillStyle = '#fff';
-                ctx.font = '10px Inter';
-                ctx.textAlign = 'center';
-                ctx.fillText('⚡', px + TILE_SIZE / 2, py + TILE_SIZE / 2 + 4);
-            }
+        const lasers = board.lasers || [];
+        for (const laser of lasers) {
+            const dirMap = { NORTH: 'TOP', SOUTH: 'BOTTOM', EAST: 'RIGHT', WEST: 'LEFT' };
+            const dir = dirMap[laser.direction] || 'TOP';
+            const laserAsset = laser.strength === 3 ? `TRIPLE_LASER_SOURCE_${dir}.png` :
+                               laser.strength === 2 ? `DOUBLE_LASER_SOURCE_${dir}.png` : `LASER_SOURCE_${dir}.png`;
+            const img = getAsset('/assets/fields/' + laserAsset);
+            let px = laser.x * TILE_SIZE;
+            let py = laser.y * TILE_SIZE;
+            if (img) ctx.drawImage(img, px, py, TILE_SIZE, TILE_SIZE);
 
-            // Checkpoint
-            if (t.checkpoint) {
-                ctx.fillStyle = '#e74c3c';
-                ctx.font = 'bold 20px Inter';
-                ctx.textAlign = 'center';
-                ctx.fillText(t.checkpoint.number, px + TILE_SIZE / 2, py + TILE_SIZE / 2 + 7);
-            }
+            // Calculate beam trajectory
+            let cx = laser.x;
+            let cy = laser.y;
+            let dx = laser.direction === 'EAST' ? 1 : laser.direction === 'WEST' ? -1 : 0;
+            let dy = laser.direction === 'SOUTH' ? 1 : laser.direction === 'NORTH' ? -1 : 0;
+            let isHorizontal = dx !== 0;
 
-            // Walls
-            if (t.walls && t.walls.length) {
-                ctx.strokeStyle = TILE_COLORS.WALL;
-                ctx.lineWidth = 3;
-                for (const wall of t.walls) {
-                    ctx.beginPath();
-                    if (wall === 'NORTH') { ctx.moveTo(px, py); ctx.lineTo(px + TILE_SIZE, py); }
-                    if (wall === 'SOUTH') { ctx.moveTo(px, py + TILE_SIZE); ctx.lineTo(px + TILE_SIZE, py + TILE_SIZE); }
-                    if (wall === 'WEST') { ctx.moveTo(px, py); ctx.lineTo(px, py + TILE_SIZE); }
-                    if (wall === 'EAST') { ctx.moveTo(px + TILE_SIZE, py); ctx.lineTo(px + TILE_SIZE, py + TILE_SIZE); }
-                    ctx.stroke();
+            const beamAssetPrefix = laser.strength === 3 ? 'TRIPLE_LASER_OVERLAY_' :
+                                    laser.strength === 2 ? 'DOUBLE_LASER_OVERLAY_' : '';
+            const beamAssetSuffix = isHorizontal ? (laser.strength > 1 ? 'HORIZONTAL.png' : 'HorizontalLaserOverlay.png') :
+                                                   (laser.strength > 1 ? 'VERTICAL.png' : 'VerticalLaserOverlay.png');
+            const beamAsset = `/assets/overlays/${beamAssetPrefix}${beamAssetSuffix}`;
+            const beamImg = getAsset(beamAsset);
+
+            let blocked = false;
+            while (!blocked) {
+                const currentTile = tiles.find(t => t.x === cx && t.y === cy);
+                if (currentTile && currentTile.walls && currentTile.walls.includes(laser.direction)) {
+                    blocked = true;
+                    break;
+                }
+
+                cx += dx;
+                cy += dy;
+
+                if (cx < 0 || cy < 0 || cx >= board.width || cy >= board.height) {
+                    blocked = true;
+                    break;
+                }
+
+                if (beamImg) {
+                    ctx.drawImage(beamImg, cx * TILE_SIZE, cy * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                }
+
+                const objHit = robots.some(r => r.x === cx && r.y === cy && !r.destroyed);
+                if (objHit) {
+                    blocked = true;
+                    break;
+                }
+
+                const targetDirOpposite = laser.direction === 'NORTH' ? 'SOUTH' :
+                                          laser.direction === 'SOUTH' ? 'NORTH' :
+                                          laser.direction === 'EAST' ? 'WEST' : 'EAST';
+
+                const targetTile = tiles.find(t => t.x === cx && t.y === cy);
+                if (targetTile && targetTile.walls && targetTile.walls.includes(targetDirOpposite)) {
+                    blocked = true;
+                    break;
                 }
             }
         }
 
-        // Draw lasers
-        const lasers = board.lasers || [];
-        for (const laser of lasers) {
-            ctx.strokeStyle = 'rgba(255, 0, 0, 0.4)';
-            ctx.lineWidth = laser.strength > 1 ? 3 : 1;
-            const lx = laser.x * TILE_SIZE + TILE_SIZE / 2;
-            const ly = laser.y * TILE_SIZE + TILE_SIZE / 2;
-            ctx.beginPath();
-            ctx.arc(lx, ly, 4, 0, Math.PI * 2);
-            ctx.stroke();
-        }
-
-        // Draw robots
-        const robots = gameState.robots || [];
         for (const robot of robots) {
             if (robot.destroyed) continue;
-            const rx = robot.x * TILE_SIZE + TILE_SIZE / 2;
-            const ry = robot.y * TILE_SIZE + TILE_SIZE / 2;
-            const color = ROBOT_COLORS[robot.robotIndex % ROBOT_COLORS.length];
-
-            // Robot body
-            ctx.fillStyle = color;
-            ctx.beginPath();
-            ctx.arc(rx, ry, TILE_SIZE / 3, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.strokeStyle = '#fff';
-            ctx.lineWidth = 2;
-            ctx.stroke();
-
-            // Direction indicator
-            const dirAngles = { NORTH: -Math.PI / 2, EAST: 0, SOUTH: Math.PI / 2, WEST: Math.PI };
-            const angle = dirAngles[robot.direction] || 0;
-            ctx.fillStyle = '#fff';
-            ctx.beginPath();
-            ctx.moveTo(rx + Math.cos(angle) * 14, ry + Math.sin(angle) * 14);
-            ctx.lineTo(rx + Math.cos(angle + 2.5) * 6, ry + Math.sin(angle + 2.5) * 6);
-            ctx.lineTo(rx + Math.cos(angle - 2.5) * 6, ry + Math.sin(angle - 2.5) * 6);
-            ctx.closePath();
-            ctx.fill();
+            const rx = robot.x * TILE_SIZE;
+            const ry = robot.y * TILE_SIZE;
+            const img = getAsset(getRobotImagePath(robot));
+            if (img) {
+                ctx.drawImage(img, rx, ry, TILE_SIZE, TILE_SIZE);
+            } else {
+                ctx.fillStyle = ROBOT_COLORS[robot.robotIndex % ROBOT_COLORS.length];
+                ctx.beginPath();
+                ctx.arc(rx + TILE_SIZE/2, ry + TILE_SIZE/2, TILE_SIZE/3, 0, Math.PI * 2);
+                ctx.fill();
+            }
         }
     }
 
@@ -687,13 +765,38 @@ const App = (() => {
                 </div>`;
         }).join('');
 
-        // Show start button only for host
+        // Configure start button and settings access only for host
         const isHost = currentUser && players.some(p => p.userId === currentUser.userId && p.isHost);
         const startBtn = document.getElementById('btn-start-game');
+        const addBotBtn = document.getElementById('btn-add-bot');
+        const boardSelect = document.getElementById('game-board-select');
+        const checkpointSelect = document.getElementById('game-checkpoints');
+        const laserCheck = document.getElementById('game-robot-lasers');
+        const shutdownCheck = document.getElementById('game-shutdown');
+
         if (isHost) {
             startBtn.classList.remove('hidden');
+            if (addBotBtn) addBotBtn.classList.remove('hidden');
+            if (boardSelect) boardSelect.disabled = false;
+            if (checkpointSelect) checkpointSelect.disabled = false;
+            if (laserCheck) laserCheck.disabled = false;
+            if (shutdownCheck) shutdownCheck.disabled = false;
         } else {
             startBtn.classList.add('hidden');
+            if (addBotBtn) addBotBtn.classList.add('hidden');
+            if (boardSelect) boardSelect.disabled = true;
+            if (checkpointSelect) checkpointSelect.disabled = true;
+            if (laserCheck) laserCheck.disabled = true;
+            if (shutdownCheck) shutdownCheck.disabled = true;
+        }
+
+        const currentBoard = lobby.gameSettings?.boardName || 'map1';
+        if (boardSelect) {
+            boardSelect.value = currentBoard;
+            renderMapPreview(currentBoard);
+        }
+        if (checkpointSelect && lobby.gameSettings?.checkpoints) {
+            checkpointSelect.value = lobby.gameSettings.checkpoints;
         }
     }
 
@@ -708,6 +811,67 @@ const App = (() => {
                 <p>${winners.map(w => `<strong>${escapeHtml(w.username)}</strong>`).join(', ')}</p>`;
         } else {
             container.innerHTML = '<p>Kein Gewinner.</p>';
+        }
+    }
+
+    function updateMapSelects() {
+        const select = document.getElementById('game-board-select');
+        if (!select) return;
+        const currentVal = select.value;
+        select.innerHTML = availableBoards.map(b => `<option value="${b.id}">${b.name} (Max: ${b.maxPlayers})</option>`).join('');
+        if (availableBoards.some(b => b.id === currentVal)) {
+            select.value = currentVal;
+        }
+        renderMapPreview();
+    }
+
+    function renderMapPreview(boardName) {
+        const select = document.getElementById('game-board-select');
+        if (!select) return;
+        boardName = boardName || select.value;
+        const boardInfo = availableBoards.find(b => b.id === boardName);
+        if (!boardInfo) return;
+
+        const info = document.getElementById('map-preview-info');
+        if (info) info.textContent = `Max. Spieler: ${boardInfo.maxPlayers} | Checkpoints: ${boardInfo.boardData.totalCheckpoints}`;
+
+        const canvas = document.getElementById('map-preview-canvas');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const PREVIEW_TILE_SIZE = 20;
+
+        const board = boardInfo.boardData;
+        const w = board.width || 12;
+        const h = board.height || 12;
+
+        canvas.width = w * PREVIEW_TILE_SIZE;
+        canvas.height = h * PREVIEW_TILE_SIZE;
+
+        const defaultFloor = getAsset('/assets/fields/DEFAULT_TOP.png');
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                const px = x * PREVIEW_TILE_SIZE;
+                const py = y * PREVIEW_TILE_SIZE;
+                if (defaultFloor) {
+                    ctx.drawImage(defaultFloor, px, py, PREVIEW_TILE_SIZE, PREVIEW_TILE_SIZE);
+                } else {
+                    ctx.fillStyle = TILE_COLORS.FLOOR;
+                    ctx.fillRect(px, py, PREVIEW_TILE_SIZE, PREVIEW_TILE_SIZE);
+                }
+            }
+        }
+
+        const tiles = board.tiles || [];
+        for (const t of tiles) {
+            const px = t.x * PREVIEW_TILE_SIZE;
+            const py = t.y * PREVIEW_TILE_SIZE;
+
+            const layers = getTileLayerPaths(t);
+            for (const layer of layers) {
+                const img = getAsset(layer);
+                if (img) ctx.drawImage(img, px, py, PREVIEW_TILE_SIZE, PREVIEW_TILE_SIZE);
+            }
+
         }
     }
 

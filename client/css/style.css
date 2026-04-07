@@ -277,6 +277,11 @@ button {
     color: var(--text-muted);
 }
 
+.form-group select option {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
 .form-divider {
     display: flex;
     align-items: center;

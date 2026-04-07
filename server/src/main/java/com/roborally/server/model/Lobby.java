@@ -29,7 +29,7 @@ public class Lobby {
         this.playerIds.add(hostUserId);
 
         // Default game settings
-        gameSettings.put("boardName", "Plan B");
+        gameSettings.put("boardName", "map1");
         gameSettings.put("timerEnabled", true);
         gameSettings.put("timerSeconds", 60);
     }

@@ -2,6 +2,7 @@ package com.roborally.server.config;
 
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
+import org.springframework.web.servlet.config.annotation.ViewControllerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 @Configuration
@@ -11,10 +12,15 @@ public class WebConfig implements WebMvcConfigurer {
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
         // Serve game assets from the gameResources directory
         registry.addResourceHandler("/assets/**")
-                .addResourceLocations("file:../gameResources/");
+                .addResourceLocations("file:../../gameResources/");
         
         // Serve client files
         registry.addResourceHandler("/**")
                 .addResourceLocations("file:../client/");
+    }
+
+    @Override
+    public void addViewControllers(ViewControllerRegistry registry) {
+        registry.addViewController("/").setViewName("forward:/index.html");
     }
 }

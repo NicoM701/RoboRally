@@ -2,6 +2,7 @@ package com.roborally.server.service;
 
 import com.roborally.common.enums.MessageType;
 import com.roborally.common.protocol.Message;
+import com.roborally.server.model.Board;
 import com.roborally.server.model.Lobby;
 import com.roborally.server.model.User;
 import org.slf4j.Logger;
@@ -28,10 +29,12 @@ public class LobbyService {
     private final UserService userService;
     private final SessionManager sessionManager;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+    private final BoardLoader boardLoader;
 
-    public LobbyService(UserService userService, SessionManager sessionManager) {
+    public LobbyService(UserService userService, SessionManager sessionManager, BoardLoader boardLoader) {
         this.userService = userService;
         this.sessionManager = sessionManager;
+        this.boardLoader = boardLoader;
     }
 
     // ─── Create ─────────────────────────────────────────
@@ -54,10 +57,16 @@ public class LobbyService {
             lobby.setPasswordHash(passwordEncoder.encode(password));
         }
 
+        String initialBoard = "map6";
+        if (maxPlayers <= 2) initialBoard = "map1";
+        else if (maxPlayers <= 4) initialBoard = "map3";
+        lobby.getGameSettings().put("boardName", initialBoard);
+
         lobbies.put(lobbyId, lobby);
         userLobbyMap.put(hostUserId, lobbyId);
 
         log.info("Lobby created: '{}' (ID: {}) by user {}", name, lobbyId, hostUserId);
+        broadcastGlobalLobbyList();
         return lobby;
     }
 
@@ -203,6 +212,11 @@ public class LobbyService {
             if (newMaxPlayers < 2 || newMaxPlayers > 8) {
                 throw new IllegalArgumentException("Spieleranzahl muss zwischen 2 und 8 liegen.");
             }
+            String currentBoard = (String) lobby.getGameSettings().getOrDefault("boardName", "map1");
+            Board board = boardLoader.loadBoard(currentBoard);
+            if (board.getStartPositions().size() < newMaxPlayers) {
+                throw new IllegalArgumentException("Das aktuelle Spielbrett (" + currentBoard + ") unterstützt nur " + board.getStartPositions().size() + " Spieler.");
+            }
             lobby.setMaxPlayers(newMaxPlayers);
         }
 
@@ -220,6 +234,15 @@ public class LobbyService {
 
         // Merge settings
         if (settings != null) {
+            String targetBoard = (String) lobby.getGameSettings().getOrDefault("boardName", "map1");
+            if (settings.containsKey("boardName")) {
+                targetBoard = (String) settings.get("boardName");
+            }
+            Board board = boardLoader.loadBoard(targetBoard);
+            if (board.getStartPositions().size() < lobby.getMaxPlayers()) {
+                throw new IllegalArgumentException("Dieses Spielbrett unterstützt nur " + board.getStartPositions().size() + " Spieler. Aktuelle Max-Spieler: " + lobby.getMaxPlayers());
+            }
+
             lobby.getGameSettings().putAll(settings);
         }
 
@@ -242,6 +265,7 @@ public class LobbyService {
 
         broadcastToLobby(lobby, Message.of(MessageType.LOBBY_CLOSED));
         log.info("Lobby '{}' closed", lobby.getName());
+        broadcastGlobalLobbyList();
     }
 
     // ─── Queries ────────────────────────────────────────
@@ -274,10 +298,17 @@ public class LobbyService {
 
     // ─── Broadcast Helpers ──────────────────────────────
 
+    public void broadcastGlobalLobbyList() {
+        sessionManager.broadcastAll(Message.of(MessageType.LOBBY_LIST, Map.of(
+                "lobbies", getLobbyList())));
+    }
+
     private void broadcastLobbyUpdate(Lobby lobby) {
         Map<Long, String> usernames = getUsernameMap(lobby.getPlayerIds());
         Message update = Message.of(MessageType.LOBBY_UPDATE, Map.of("lobby", lobby.toMap(usernames)));
         broadcastToLobby(lobby, update);
+        // Also inform the whole server about the updated player count / settings
+        broadcastGlobalLobbyList();
     }
 
     public void broadcastToLobby(Lobby lobby, Message message) {
