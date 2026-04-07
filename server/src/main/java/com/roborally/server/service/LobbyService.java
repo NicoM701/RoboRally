@@ -66,26 +66,28 @@ public class LobbyService {
     public Lobby joinLobby(Long userId, String lobbyId, String password) {
         Lobby lobby = getLobbyOrThrow(lobbyId);
 
-        if (lobby.getStatus() != Lobby.LobbyStatus.WAITING) {
-            throw new IllegalArgumentException("Die Lobby ist nicht mehr offen.");
-        }
-        if (lobby.containsPlayer(userId)) {
-            throw new IllegalArgumentException("Du bist bereits in dieser Lobby.");
-        }
-        if (lobby.isFull()) {
-            throw new IllegalArgumentException("Die Lobby ist voll.");
-        }
-        if (userLobbyMap.containsKey(userId)) {
-            throw new IllegalArgumentException("Du bist bereits in einer anderen Lobby.");
-        }
-        if (lobby.hasPassword()) {
-            if (password == null || !passwordEncoder.matches(password, lobby.getPasswordHash())) {
-                throw new IllegalArgumentException("Falsches Lobby-Passwort.");
+        synchronized (lobby) {
+            if (lobby.getStatus() != Lobby.LobbyStatus.WAITING) {
+                throw new IllegalArgumentException("Die Lobby ist nicht mehr offen.");
             }
-        }
+            if (lobby.containsPlayer(userId)) {
+                throw new IllegalArgumentException("Du bist bereits in dieser Lobby.");
+            }
+            if (lobby.isFull()) {
+                throw new IllegalArgumentException("Die Lobby ist voll.");
+            }
+            if (userLobbyMap.containsKey(userId)) {
+                throw new IllegalArgumentException("Du bist bereits in einer anderen Lobby.");
+            }
+            if (lobby.hasPassword()) {
+                if (password == null || !passwordEncoder.matches(password, lobby.getPasswordHash())) {
+                    throw new IllegalArgumentException("Falsches Lobby-Passwort.");
+                }
+            }
 
-        lobby.addPlayer(userId);
-        userLobbyMap.put(userId, lobbyId);
+            lobby.addPlayer(userId);
+            userLobbyMap.put(userId, lobbyId);
+        }
 
         String username = getUsernameById(userId);
         log.info("User {} joined lobby '{}'", username, lobby.getName());
@@ -115,8 +117,11 @@ public class LobbyService {
         }
 
         String username = getUsernameById(userId);
-        lobby.removePlayer(userId);
-        userLobbyMap.remove(userId);
+        
+        synchronized (lobby) {
+            lobby.removePlayer(userId);
+            userLobbyMap.remove(userId);
+        }
 
         log.info("User {} left lobby '{}'", username, lobby.getName());
 
@@ -148,18 +153,20 @@ public class LobbyService {
 
         Lobby lobby = getLobbyOrThrow(lobbyId);
 
-        if (!lobby.isHost(hostUserId)) {
-            throw new IllegalArgumentException("Nur der Host kann Spieler kicken.");
-        }
-        if (hostUserId.equals(targetUserId)) {
-            throw new IllegalArgumentException("Du kannst dich nicht selbst kicken.");
-        }
-        if (!lobby.containsPlayer(targetUserId)) {
-            throw new IllegalArgumentException("Spieler ist nicht in dieser Lobby.");
-        }
+        synchronized (lobby) {
+            if (!lobby.isHost(hostUserId)) {
+                throw new IllegalArgumentException("Nur der Host kann Spieler kicken.");
+            }
+            if (hostUserId.equals(targetUserId)) {
+                throw new IllegalArgumentException("Du kannst dich nicht selbst kicken.");
+            }
+            if (!lobby.containsPlayer(targetUserId)) {
+                throw new IllegalArgumentException("Spieler ist nicht in dieser Lobby.");
+            }
 
-        lobby.removePlayer(targetUserId);
-        userLobbyMap.remove(targetUserId);
+            lobby.removePlayer(targetUserId);
+            userLobbyMap.remove(targetUserId);
+        }
 
         String kickedName = getUsernameById(targetUserId);
         log.info("User {} kicked from lobby '{}' by host", kickedName, lobby.getName());

@@ -254,8 +254,13 @@ public class MessageRouter {
         if (userId == null)
             return;
 
+        Object settingsObj = message.get("settings");
+        if (!(settingsObj instanceof Map)) {
+            sessionManager.sendMessage(session, Message.error("Ungültiges Format für Einstellungen."));
+            return;
+        }
         @SuppressWarnings("unchecked")
-        Map<String, Object> settings = (Map<String, Object>) message.get("settings");
+        Map<String, Object> settings = (Map<String, Object>) settingsObj;
         lobbyService.updateGameSettings(userId, settings);
     }
 
@@ -292,14 +297,24 @@ public class MessageRouter {
         if (userId == null)
             return;
 
-        List<Object> rawCards = (List<Object>) message.get("cardIds");
-        if (rawCards == null) {
-            sessionManager.sendMessage(session, Message.error("Karten-IDs fehlen."));
+        Object rawCardsObj = message.get("cardIds");
+        if (!(rawCardsObj instanceof List)) {
+            sessionManager.sendMessage(session, Message.error("Karten-IDs fehlen oder haben falsches Format."));
             return;
         }
-        List<Integer> cardIds = rawCards.stream()
-                .map(o -> o instanceof Number ? ((Number) o).intValue() : Integer.parseInt(o.toString()))
-                .collect(Collectors.toList());
+        
+        @SuppressWarnings("unchecked")
+        List<Object> rawCards = (List<Object>) rawCardsObj;
+        
+        List<Integer> cardIds;
+        try {
+            cardIds = rawCards.stream()
+                    .map(o -> o instanceof Number ? ((Number) o).intValue() : Integer.parseInt(o.toString()))
+                    .collect(Collectors.toList());
+        } catch (NumberFormatException e) {
+            sessionManager.sendMessage(session, Message.error("Ungültige Karten-ID enthalten."));
+            return;
+        }
 
         gameService.submitProgram(userId, cardIds);
     }

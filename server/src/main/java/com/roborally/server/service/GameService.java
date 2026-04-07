@@ -86,7 +86,14 @@ public class GameService {
         List<Long> players = lobby.getPlayerIds();
         for (int i = 0; i < players.size(); i++) {
             Long playerId = players.get(i);
-            int[] pos = i < starts.size() ? starts.get(i) : new int[] { 1 + i, 11 };
+            int[] pos;
+            if (i < starts.size()) {
+                pos = starts.get(i);
+            } else {
+                int px = i % board.getWidth();
+                int py = Math.max(0, board.getHeight() - 1 - (i / board.getWidth()));
+                pos = new int[] { px, py };
+            }
             Robot robot = new Robot(playerId, i, pos[0], pos[1], Direction.NORTH);
             game.addRobot(playerId, robot);
         }
@@ -162,10 +169,12 @@ public class GameService {
         GameState game = getGameByPlayer(playerId);
         if (game == null)
             throw new IllegalArgumentException("Du bist in keinem Spiel.");
-        if (game.getPhase() != GamePhase.PROGRAMMING)
-            throw new IllegalArgumentException("Nicht in der Programmierphase.");
-        if (game.getSubmittedPlayers().contains(playerId))
-            throw new IllegalArgumentException("Programm bereits eingereicht.");
+            
+        synchronized (game) {
+            if (game.getPhase() != GamePhase.PROGRAMMING)
+                throw new IllegalArgumentException("Nicht in der Programmierphase.");
+            if (game.getSubmittedPlayers().contains(playerId))
+                throw new IllegalArgumentException("Programm bereits eingereicht.");
 
         Robot robot = game.getRobot(playerId);
         if (robot == null || robot.isDestroyed())
@@ -219,12 +228,13 @@ public class GameService {
                     "message", "Programm eingereicht!")));
         }
 
-        log.info("Player {} submitted program for round {}", playerId, game.getRound());
+            log.info("Player {} submitted program for round {}", playerId, game.getRound());
 
-        // Check if all players submitted
-        if (game.allSubmitted()) {
-            cancelTimer(game.getLobbyId());
-            startExecutionPhase(game);
+            // Check if all players submitted
+            if (game.allSubmitted()) {
+                cancelTimer(game.getLobbyId());
+                startExecutionPhase(game);
+            }
         }
     }
 
@@ -247,14 +257,22 @@ public class GameService {
             // Check for checkpoint advancement
             checkCheckpoints(game);
 
-            // Respawn destroyed robots that have lives left
-            respawnDestroyedRobots(game);
-
             // Broadcast step result for client animation
             broadcastToGame(game, Message.of(MessageType.EXECUTION_STEP, Map.of(
                     "step", step + 1,
                     "results", stepResults,
                     "robots", getRobotStates(game))));
+
+            // Check for game over immediately after evaluating checkpoints
+            for (Robot robot : game.getRobots().values()) {
+                if (robot.getNextCheckpoint() > game.getBoard().getTotalCheckpoints()) {
+                    endGame(game, robot.getPlayerId());
+                    return;
+                }
+            }
+
+            // Respawn destroyed robots that have lives left
+            respawnDestroyedRobots(game);
 
             log.debug("Step {} executed: {} movements", step + 1, stepResults.size());
         }
@@ -310,14 +328,6 @@ public class GameService {
         // Collect used cards
         for (Robot robot : game.getActiveRobots()) {
             cardService.collectUsedCards(game.getDiscardPile(), robot);
-        }
-
-        // Check for game over
-        for (Robot robot : game.getRobots().values()) {
-            if (robot.getNextCheckpoint() > game.getBoard().getTotalCheckpoints()) {
-                endGame(game, robot.getPlayerId());
-                return;
-            }
         }
 
         // Check all dead
@@ -377,10 +387,12 @@ public class GameService {
     private void startProgrammingTimer(GameState game) {
         cancelTimer(game.getLobbyId());
         ScheduledFuture<?> timer = scheduler.schedule(() -> {
-            log.info("Programming timer expired for lobby {}", game.getLobbyId());
-            autoSubmitMissing(game);
-            if (game.allSubmitted()) {
-                startExecutionPhase(game);
+            synchronized (game) {
+                log.info("Programming timer expired for lobby {}", game.getLobbyId());
+                autoSubmitMissing(game);
+                if (game.allSubmitted()) {
+                    startExecutionPhase(game);
+                }
             }
         }, PROGRAMMING_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         timers.put(game.getLobbyId(), timer);
