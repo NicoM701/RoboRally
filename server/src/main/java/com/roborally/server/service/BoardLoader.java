@@ -36,34 +36,29 @@ public class BoardLoader {
 
     public Board createDefaultBoard(String name) {
         Board board = new Board(name, 12, 12);
+        String normalizedName = name == null ? "map1" : name.toLowerCase(Locale.ROOT);
 
-        if (name.equalsIgnoreCase("map2")) {
-            generateMap2(board, 1, false);
-        } else if (name.equalsIgnoreCase("map3")) {
-            generateMap3(board, 1, false);
-        } else if (name.equalsIgnoreCase("map4")) {
-            generateMap4(board, 1, false);
-        } else if (name.equalsIgnoreCase("map5")) {
-            generateMap5(board, 1, false);
-        } else if (name.equalsIgnoreCase("map6")) {
-            generateMap6(board, 1, false);
-        } else {
-            generateMap1(board, 1, false);
+        switch (normalizedName) {
+            case "map2" -> generateMap2(board, 1, true);
+            case "map3" -> generateMap3(board, 1, true);
+            case "map4" -> generateMap4(board, 1, true);
+            case "map5" -> generateMap5(board, 1, true);
+            case "map6" -> generateMap6(board, 1, true);
+            default -> generateMap1(board, 1, true);
         }
 
-        // In the original game, checkpoint generation wasn't always producing the starts.
-        // Let's add them at bottom using a default rule if empty.
         if (board.getStartPositions().isEmpty()) {
             int maxSpawns = 8;
-            if (name.equalsIgnoreCase("map1") || name.equalsIgnoreCase("map2")) maxSpawns = 2;
-            else if (name.equalsIgnoreCase("map3") || name.equalsIgnoreCase("map4")) maxSpawns = 4;
-            
+            if (normalizedName.equals("map1") || normalizedName.equals("map2")) maxSpawns = 2;
+            else if (normalizedName.equals("map3") || normalizedName.equals("map4")) maxSpawns = 4;
+
             for (int x = 1; x <= maxSpawns; x++) {
-                board.getTile(x, 11).setFieldType(FieldType.START);
                 board.addStartPosition(x, 11);
             }
         }
 
+        board.setTotalCheckpoints(2);
+        applyLegacyConveyorMetadata(board, normalizedName);
         calculateConveyorCurves(board);
         return board;
     }
@@ -75,11 +70,12 @@ public class BoardLoader {
                 if (tile == null || tile.getConveyorBelt() == null) continue;
 
                 ConveyorBelt cb = tile.getConveyorBelt();
+                if (cb.isCrossing() || cb.getCurveRotation() != null || cb.getCurveFrom() != null) {
+                    continue;
+                }
+
                 Direction outDir = cb.getDirection();
                 List<Direction> inputDirs = new ArrayList<>();
-
-                cb.setCurveRotation(null);
-                cb.setCurveFrom(null);
 
                 for (Direction d : Direction.values()) {
                     int nx = x + d.dx();
@@ -91,7 +87,7 @@ public class BoardLoader {
                     }
                 }
 
-                if (cb.isCrossing() || inputDirs.isEmpty()) {
+                if (inputDirs.isEmpty()) {
                     continue;
                 }
 
@@ -124,6 +120,184 @@ public class BoardLoader {
             return RotationDirection.COUNTERCLOCKWISE;
         }
         return null;
+    }
+
+    private enum LegacyOrientation {
+        LEFT, RIGHT, TOP, BOTTOM
+    }
+
+    private Tile legacyTile(Board board, int legacyX, int legacyY) {
+        return board.getTile(board.getWidth() - 1 - legacyY, legacyX);
+    }
+
+    private Direction legacyDirection(LegacyOrientation orientation) {
+        return switch (orientation) {
+            case LEFT -> Direction.NORTH;
+            case RIGHT -> Direction.SOUTH;
+            case TOP -> Direction.WEST;
+            case BOTTOM -> Direction.EAST;
+        };
+    }
+
+    private RotationDirection legacyCurveRotation(int legacyCurve) {
+        return legacyCurve == 2 ? RotationDirection.CLOCKWISE : RotationDirection.COUNTERCLOCKWISE;
+    }
+
+    private Direction curveFromFor(Direction outDir, RotationDirection rotation) {
+        return rotation == RotationDirection.CLOCKWISE ? outDir.rotateClockwise() : outDir.rotateCounterClockwise();
+    }
+
+    private String legacyCrossingType(int legacyCrossing) {
+        return switch (legacyCrossing) {
+            case 2 -> "RIGHT";
+            case 3 -> "LEFTRIGHT";
+            default -> "LEFT";
+        };
+    }
+
+    private ConveyorBelt requireLegacyConveyor(Board board, int legacyX, int legacyY, LegacyOrientation orientation, boolean express) {
+        Tile tile = legacyTile(board, legacyX, legacyY);
+        if (tile == null || tile.getConveyorBelt() == null) {
+            throw new IllegalStateException("Missing conveyor at legacy tile (" + legacyX + ", " + legacyY + ")");
+        }
+
+        ConveyorBelt belt = tile.getConveyorBelt();
+        Direction expectedDirection = legacyDirection(orientation);
+        if (belt.getDirection() != expectedDirection || belt.isExpress() != express) {
+            throw new IllegalStateException(
+                    "Legacy conveyor mismatch at (" + legacyX + ", " + legacyY + "): expected "
+                            + expectedDirection + " express=" + express + " but found "
+                            + belt.getDirection() + " express=" + belt.isExpress());
+        }
+        return belt;
+    }
+
+    private void annotateLegacyCurve(Board board, int legacyX, int legacyY, LegacyOrientation orientation, int legacyCurve, boolean express) {
+        ConveyorBelt belt = requireLegacyConveyor(board, legacyX, legacyY, orientation, express);
+        RotationDirection rotation = legacyCurveRotation(legacyCurve);
+        belt.setCrossing(false);
+        belt.setCurveRotation(rotation);
+        belt.setCurveFrom(curveFromFor(belt.getDirection(), rotation));
+    }
+
+    private void annotateLegacyCrossing(Board board, int legacyX, int legacyY, LegacyOrientation orientation, int legacyCrossing, boolean express) {
+        ConveyorBelt belt = requireLegacyConveyor(board, legacyX, legacyY, orientation, express);
+        belt.setCurveRotation(null);
+        belt.setCurveFrom(null);
+        belt.setCrossingType(legacyCrossingType(legacyCrossing));
+    }
+
+    private void applyLegacyConveyorMetadata(Board board, String boardName) {
+        switch (boardName) {
+            case "map1" -> applyMap1ConveyorMetadata(board);
+            case "map3" -> applyMap3ConveyorMetadata(board);
+            case "map4" -> applyMap4ConveyorMetadata(board);
+            case "map5" -> applyMap5ConveyorMetadata(board);
+            case "map6" -> applyMap6ConveyorMetadata(board);
+            default -> {
+            }
+        }
+    }
+
+    private void applyMap1ConveyorMetadata(Board board) {
+        annotateLegacyCurve(board, 10, 0, LegacyOrientation.TOP, 2, false);
+        annotateLegacyCurve(board, 11, 0, LegacyOrientation.RIGHT, 1, false);
+        annotateLegacyCurve(board, 1, 1, LegacyOrientation.RIGHT, 1, false);
+        annotateLegacyCurve(board, 11, 1, LegacyOrientation.TOP, 2, false);
+        annotateLegacyCurve(board, 6, 4, LegacyOrientation.TOP, 2, false);
+        annotateLegacyCurve(board, 7, 4, LegacyOrientation.RIGHT, 1, false);
+        annotateLegacyCrossing(board, 1, 5, LegacyOrientation.RIGHT, 2, false);
+        annotateLegacyCurve(board, 5, 5, LegacyOrientation.RIGHT, 2, false);
+        annotateLegacyCurve(board, 7, 5, LegacyOrientation.TOP, 2, false);
+        annotateLegacyCurve(board, 4, 6, LegacyOrientation.BOTTOM, 2, false);
+        annotateLegacyCurve(board, 8, 6, LegacyOrientation.LEFT, 2, false);
+        annotateLegacyCrossing(board, 10, 6, LegacyOrientation.LEFT, 2, false);
+        annotateLegacyCurve(board, 4, 7, LegacyOrientation.LEFT, 1, false);
+        annotateLegacyCurve(board, 5, 7, LegacyOrientation.BOTTOM, 2, false);
+        annotateLegacyCurve(board, 7, 7, LegacyOrientation.LEFT, 2, false);
+        annotateLegacyCurve(board, 8, 7, LegacyOrientation.TOP, 1, false);
+        annotateLegacyCurve(board, 6, 8, LegacyOrientation.LEFT, 2, false);
+        annotateLegacyCurve(board, 7, 8, LegacyOrientation.TOP, 1, false);
+        annotateLegacyCurve(board, 1, 10, LegacyOrientation.BOTTOM, 2, false);
+        annotateLegacyCurve(board, 10, 10, LegacyOrientation.LEFT, 1, false);
+    }
+
+    private void applyMap3ConveyorMetadata(Board board) {
+        annotateLegacyCrossing(board, 5, 3, LegacyOrientation.RIGHT, 1, false);
+        annotateLegacyCrossing(board, 6, 8, LegacyOrientation.LEFT, 1, false);
+    }
+
+    private void applyMap4ConveyorMetadata(Board board) {
+        annotateLegacyCrossing(board, 1, 5, LegacyOrientation.TOP, 1, false);
+        annotateLegacyCrossing(board, 10, 6, LegacyOrientation.BOTTOM, 1, true);
+        annotateLegacyCrossing(board, 6, 1, LegacyOrientation.LEFT, 1, true);
+        annotateLegacyCrossing(board, 5, 10, LegacyOrientation.RIGHT, 1, false);
+        annotateLegacyCurve(board, 1, 1, LegacyOrientation.RIGHT, 1, false);
+        annotateLegacyCurve(board, 2, 1, LegacyOrientation.LEFT, 2, true);
+        annotateLegacyCrossing(board, 10, 1, LegacyOrientation.LEFT, 3, true);
+        annotateLegacyCurve(board, 3, 2, LegacyOrientation.LEFT, 2, false);
+        annotateLegacyCurve(board, 9, 2, LegacyOrientation.BOTTOM, 2, false);
+        annotateLegacyCurve(board, 4, 3, LegacyOrientation.LEFT, 2, true);
+        annotateLegacyCurve(board, 8, 3, LegacyOrientation.BOTTOM, 2, true);
+        annotateLegacyCurve(board, 5, 4, LegacyOrientation.LEFT, 2, false);
+        annotateLegacyCurve(board, 7, 4, LegacyOrientation.BOTTOM, 2, false);
+        annotateLegacyCurve(board, 4, 7, LegacyOrientation.TOP, 2, true);
+        annotateLegacyCurve(board, 6, 7, LegacyOrientation.RIGHT, 2, true);
+        annotateLegacyCurve(board, 3, 8, LegacyOrientation.TOP, 2, false);
+        annotateLegacyCurve(board, 7, 8, LegacyOrientation.RIGHT, 2, false);
+        annotateLegacyCurve(board, 2, 9, LegacyOrientation.TOP, 2, true);
+        annotateLegacyCurve(board, 8, 9, LegacyOrientation.RIGHT, 2, true);
+        annotateLegacyCrossing(board, 1, 10, LegacyOrientation.RIGHT, 3, false);
+        annotateLegacyCurve(board, 9, 10, LegacyOrientation.RIGHT, 2, false);
+        annotateLegacyCurve(board, 10, 10, LegacyOrientation.LEFT, 1, true);
+    }
+
+    private void applyMap5ConveyorMetadata(Board board) {
+        annotateLegacyCurve(board, 4, 0, LegacyOrientation.BOTTOM, 1, false);
+        annotateLegacyCurve(board, 5, 0, LegacyOrientation.RIGHT, 2, false);
+        annotateLegacyCrossing(board, 6, 0, LegacyOrientation.TOP, 2, false);
+        annotateLegacyCrossing(board, 10, 0, LegacyOrientation.LEFT, 1, true);
+        annotateLegacyCrossing(board, 0, 1, LegacyOrientation.TOP, 1, true);
+        annotateLegacyCrossing(board, 11, 3, LegacyOrientation.TOP, 2, false);
+        annotateLegacyCrossing(board, 0, 5, LegacyOrientation.RIGHT, 2, true);
+        annotateLegacyCrossing(board, 4, 5, LegacyOrientation.BOTTOM, 2, false);
+        annotateLegacyCurve(board, 9, 5, LegacyOrientation.RIGHT, 2, true);
+        annotateLegacyCurve(board, 11, 5, LegacyOrientation.TOP, 2, false);
+        annotateLegacyCrossing(board, 6, 6, LegacyOrientation.TOP, 2, false);
+        annotateLegacyCrossing(board, 11, 6, LegacyOrientation.LEFT, 2, true);
+        annotateLegacyCurve(board, 5, 10, LegacyOrientation.LEFT, 1, false);
+        annotateLegacyCurve(board, 6, 10, LegacyOrientation.TOP, 1, false);
+        annotateLegacyCrossing(board, 11, 10, LegacyOrientation.BOTTOM, 1, true);
+        annotateLegacyCrossing(board, 1, 11, LegacyOrientation.RIGHT, 1, true);
+        annotateLegacyCrossing(board, 4, 11, LegacyOrientation.BOTTOM, 3, false);
+        annotateLegacyCurve(board, 5, 11, LegacyOrientation.BOTTOM, 2, false);
+    }
+
+    private void applyMap6ConveyorMetadata(Board board) {
+        annotateLegacyCurve(board, 4, 0, LegacyOrientation.BOTTOM, 1, false);
+        annotateLegacyCurve(board, 5, 0, LegacyOrientation.RIGHT, 2, false);
+        annotateLegacyCrossing(board, 1, 1, LegacyOrientation.BOTTOM, 2, false);
+        annotateLegacyCurve(board, 1, 2, LegacyOrientation.LEFT, 1, false);
+        annotateLegacyCurve(board, 2, 2, LegacyOrientation.BOTTOM, 2, false);
+        annotateLegacyCurve(board, 6, 2, LegacyOrientation.TOP, 2, false);
+        annotateLegacyCurve(board, 7, 2, LegacyOrientation.RIGHT, 1, false);
+        annotateLegacyCurve(board, 1, 4, LegacyOrientation.BOTTOM, 1, false);
+        annotateLegacyCurve(board, 2, 4, LegacyOrientation.RIGHT, 2, false);
+        annotateLegacyCurve(board, 7, 4, LegacyOrientation.TOP, 2, false);
+        annotateLegacyCurve(board, 8, 4, LegacyOrientation.RIGHT, 1, false);
+        annotateLegacyCurve(board, 1, 5, LegacyOrientation.RIGHT, 2, false);
+        annotateLegacyCurve(board, 3, 5, LegacyOrientation.BOTTOM, 1, false);
+        annotateLegacyCurve(board, 4, 5, LegacyOrientation.RIGHT, 2, false);
+        annotateLegacyCurve(board, 8, 5, LegacyOrientation.TOP, 2, false);
+        annotateLegacyCurve(board, 2, 7, LegacyOrientation.BOTTOM, 1, false);
+        annotateLegacyCurve(board, 3, 7, LegacyOrientation.RIGHT, 2, false);
+        annotateLegacyCurve(board, 5, 9, LegacyOrientation.BOTTOM, 1, false);
+        annotateLegacyCurve(board, 7, 9, LegacyOrientation.RIGHT, 1, false);
+        annotateLegacyCurve(board, 1, 10, LegacyOrientation.BOTTOM, 1, false);
+        annotateLegacyCurve(board, 2, 10, LegacyOrientation.RIGHT, 2, false);
+        annotateLegacyCurve(board, 10, 10, LegacyOrientation.LEFT, 2, false);
+        annotateLegacyCurve(board, 6, 11, LegacyOrientation.LEFT, 2, false);
+        annotateLegacyCurve(board, 7, 11, LegacyOrientation.TOP, 1, false);
     }
 
     private void setLaserField(Board board, int x, int y, Direction dir, int strength) {

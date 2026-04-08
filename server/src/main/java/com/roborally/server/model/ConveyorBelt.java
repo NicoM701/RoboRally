@@ -14,6 +14,7 @@ public class ConveyorBelt {
     private final boolean express; // true = express (2 steps), false = normal (1 step)
     private RotationDirection curveRotation; // CLOCKWISE or COUNTERCLOCKWISE
     private boolean crossing;
+    private String crossingType; // LEFT, RIGHT, or LEFTRIGHT
     private Direction curveFrom; // Optional input flow direction
 
     public ConveyorBelt(Direction direction, boolean express) {
@@ -29,7 +30,13 @@ public class ConveyorBelt {
     public ConveyorBelt(Direction direction, boolean express, RotationDirection curveRotation, boolean crossing) {
         this(direction, express);
         this.curveRotation = curveRotation;
-        this.crossing = crossing;
+        setCrossing(crossing);
+    }
+
+    public ConveyorBelt(Direction direction, boolean express, RotationDirection curveRotation, String crossingType) {
+        this(direction, express);
+        this.curveRotation = curveRotation;
+        setCrossingType(crossingType);
     }
 
     public Direction getDirection() {
@@ -66,6 +73,20 @@ public class ConveyorBelt {
 
     public void setCrossing(boolean crossing) {
         this.crossing = crossing;
+        if (!crossing) {
+            this.crossingType = null;
+        } else if (this.crossingType == null) {
+            this.crossingType = "LEFTRIGHT";
+        }
+    }
+
+    public String getCrossingType() {
+        return crossingType;
+    }
+
+    public void setCrossingType(String crossingType) {
+        this.crossingType = crossingType;
+        this.crossing = crossingType != null && !crossingType.isBlank();
     }
 
     public Direction getCurveFrom() {
@@ -94,6 +115,7 @@ public class ConveyorBelt {
         }
         if (crossing) {
             m.put("crossing", true);
+            m.put("crossingType", crossingType == null ? "LEFTRIGHT" : crossingType);
         }
         return m;
     }

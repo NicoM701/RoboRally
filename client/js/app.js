@@ -457,19 +457,38 @@ const App = (() => {
     };
 
     const ASSETS = {};
+    const ASSET_STATES = {};
     function getAsset(src) {
         if (!src) return null;
         if (!ASSETS[src]) {
             const img = new Image();
             img.src = src;
             img.onload = () => {
+                ASSET_STATES[src] = 'loaded';
+                if (currentScreen === 'game') renderBoard();
+                else updateMapSelects();
+            };
+            img.onerror = () => {
+                ASSET_STATES[src] = 'error';
                 if (currentScreen === 'game') renderBoard();
                 else updateMapSelects();
             };
             ASSETS[src] = img;
+            ASSET_STATES[src] = 'loading';
             return null;
         }
-        return ASSETS[src].complete && ASSETS[src].naturalWidth > 0 ? ASSETS[src] : null;
+        return ASSET_STATES[src] === 'loaded' && ASSETS[src].complete && ASSETS[src].naturalWidth > 0 ? ASSETS[src] : null;
+    }
+
+    function resolveLayerPath(layer) {
+        if (typeof layer === 'string') return layer;
+        if (!layer || !layer.src) return null;
+        if (layer.fallback && ASSET_STATES[layer.src] === 'error') return layer.fallback;
+        return layer.src;
+    }
+
+    function getLayerAsset(layer) {
+        return getAsset(resolveLayerPath(layer));
     }
 
     function normalizeCurveRotation(curveRotation) {
@@ -519,7 +538,16 @@ const App = (() => {
                 const cDir = curveMap[curveRotation];
                 layers.push(`/assets/fields/${pre}CURVE_${cDir}${dir}.png`);
             } else if (t.conveyorBelt.crossing) {
-                layers.push(`/assets/fields/${pre}CROSSING_LEFTRIGHT_${dir}.png`);
+                const crossingType = (t.conveyorBelt.crossingType || 'LEFTRIGHT').toUpperCase();
+                const fallback = `/assets/fields/${pre}CROSSING_LEFTRIGHT_${dir}.png`;
+                if (crossingType === 'LEFTRIGHT') {
+                    layers.push(fallback);
+                } else {
+                    layers.push({
+                        src: `/assets/fields/${pre}CROSSING_${crossingType}_${dir}.png`,
+                        fallback
+                    });
+                }
             } else {
                 layers.push(`/assets/fields/${pre}${dir}.png`);
             }
@@ -590,7 +618,7 @@ const App = (() => {
 
             const layers = getTileLayerPaths(t);
             for (const layer of layers) {
-                const img = getAsset(layer);
+                const img = getLayerAsset(layer);
                 if (img) ctx.drawImage(img, px, py, TILE_SIZE, TILE_SIZE);
             }
 
@@ -897,7 +925,7 @@ const App = (() => {
 
             const layers = getTileLayerPaths(t);
             for (const layer of layers) {
-                const img = getAsset(layer);
+                const img = getLayerAsset(layer);
                 if (img) ctx.drawImage(img, px, py, PREVIEW_TILE_SIZE, PREVIEW_TILE_SIZE);
             }
 
