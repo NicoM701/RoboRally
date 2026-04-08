@@ -63,12 +63,16 @@ public class BoardLoader {
         LEFT, RIGHT, TOP, BOTTOM
     }
 
-    private int legacyScreenY(Board board, int legacyY) {
-        return board.getHeight() - 1 - legacyY;
+    private int legacyScreenX(Board board, int legacyY) {
+        return board.getWidth() - 1 - legacyY;
+    }
+
+    private int legacyScreenY(int legacyX) {
+        return legacyX;
     }
 
     private Tile legacyTile(Board board, int legacyX, int legacyY) {
-        return board.getTile(legacyX, legacyScreenY(board, legacyY));
+        return board.getTile(legacyScreenX(board, legacyY), legacyScreenY(legacyX));
     }
 
     private Tile replaceLegacyTile(Board board, int legacyX, int legacyY, FieldType type) {
@@ -79,10 +83,10 @@ public class BoardLoader {
 
     private Direction legacyDirection(LegacyOrientation orientation) {
         return switch (orientation) {
-            case LEFT -> Direction.WEST;
-            case RIGHT -> Direction.EAST;
-            case TOP -> Direction.NORTH;
-            case BOTTOM -> Direction.SOUTH;
+            case LEFT -> Direction.NORTH;
+            case RIGHT -> Direction.SOUTH;
+            case TOP -> Direction.WEST;
+            case BOTTOM -> Direction.EAST;
         };
     }
 
@@ -155,8 +159,9 @@ public class BoardLoader {
     }
 
     private void legacyLaser(Board board, int legacyX, int legacyY, LegacyOrientation orientation, int power) {
-        int screenY = legacyScreenY(board, legacyY);
-        board.addLaser(new Laser(legacyX, screenY, legacyDirection(orientation), power));
+        int screenX = legacyScreenX(board, legacyY);
+        int screenY = legacyScreenY(legacyX);
+        board.addLaser(new Laser(screenX, screenY, legacyDirection(orientation), power));
     }
 
     private void legacyMirrorWalls(Board board) {

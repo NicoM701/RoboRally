@@ -66,22 +66,33 @@ class BoardLoaderTest {
     }
 
     @Test
-    @DisplayName("Map1: legacy board only flips vertically, not rotate")
-    void map1_legacyCoordinatesAreVerticallyFlippedOnly() {
+    @DisplayName("Map1: legacy board is transposed after the vertical flip")
+    void map1_legacyCoordinatesAreTransposedAfterVerticalFlip() {
         Board board = boardLoader.createDefaultBoard("map1");
 
-        assertTrue(board.getTile(0, 0).isPit());
-        assertNotNull(board.getTile(0, 6).getConveyorBelt());
-        assertEquals(Direction.EAST, board.getTile(0, 6).getConveyorBelt().getDirection());
-        assertNotNull(board.getTile(5, 11).getConveyorBelt());
-        assertEquals(Direction.SOUTH, board.getTile(5, 11).getConveyorBelt().getDirection());
+        assertTrue(board.getTile(9, 3).isPit());
+        assertNotNull(board.getTile(0, 5).getConveyorBelt());
+        assertEquals(Direction.EAST, board.getTile(0, 5).getConveyorBelt().getDirection());
+        assertNotNull(board.getTile(11, 10).getConveyorBelt());
+        assertEquals(Direction.WEST, board.getTile(11, 10).getConveyorBelt().getDirection());
+    }
+
+    @Test
+    @DisplayName("Map1: transformed checkpoints match the legacy single-board layout")
+    void map1_checkpointsMatchLegacyBoardPositions() {
+        Board board = boardLoader.createDefaultBoard("map1");
+
+        assertNotNull(board.getTile(4, 1).getCheckpoint());
+        assertEquals(1, board.getTile(4, 1).getCheckpoint().getNumber());
+        assertNotNull(board.getTile(7, 8).getCheckpoint());
+        assertEquals(2, board.getTile(7, 8).getCheckpoint().getNumber());
     }
 
     @Test
     @DisplayName("Map1: repair tiles keep walls from the legacy layout")
     void map1_repairTilePreservesLegacyWalls() {
         Board board = boardLoader.createDefaultBoard("map1");
-        Tile repairTile = board.getTile(3, 1);
+        Tile repairTile = board.getTile(1, 3);
 
         assertTrue(repairTile.isRepair());
         assertTrue(repairTile.hasWall(Direction.EAST));
@@ -93,8 +104,8 @@ class BoardLoaderTest {
     void map1_mirrorsLegacyWalls() {
         Board board = boardLoader.createDefaultBoard("map1");
 
-        assertTrue(board.getTile(10, 9).hasWall(Direction.SOUTH));
-        assertTrue(board.getTile(10, 10).hasWall(Direction.NORTH));
+        assertTrue(board.getTile(10, 3).hasWall(Direction.SOUTH));
+        assertTrue(board.getTile(10, 4).hasWall(Direction.NORTH));
     }
 
     @Test
@@ -102,16 +113,27 @@ class BoardLoaderTest {
     void map1_conveyorMetadataMatchesLegacyBoard() {
         Board board = boardLoader.createDefaultBoard("map1");
 
-        ConveyorBelt curve = board.getTile(10, 11).getConveyorBelt();
+        ConveyorBelt curve = board.getTile(11, 10).getConveyorBelt();
         assertNotNull(curve);
-        assertEquals(Direction.NORTH, curve.getDirection());
+        assertEquals(Direction.WEST, curve.getDirection());
         assertEquals(RotationDirection.CLOCKWISE, curve.getCurveRotation());
 
-        ConveyorBelt crossing = board.getTile(1, 6).getConveyorBelt();
+        ConveyorBelt crossing = board.getTile(6, 1).getConveyorBelt();
         assertNotNull(crossing);
         assertTrue(crossing.isCrossing());
         assertEquals("RIGHT", crossing.getCrossingType());
-        assertEquals(Direction.EAST, crossing.getDirection());
+        assertEquals(Direction.SOUTH, crossing.getDirection());
+    }
+
+    @Test
+    @DisplayName("Map2: transformed checkpoints match the legacy layout")
+    void map2_checkpointsMatchLegacyBoardPositions() {
+        Board board = boardLoader.createDefaultBoard("map2");
+
+        assertNotNull(board.getTile(9, 2).getCheckpoint());
+        assertEquals(1, board.getTile(9, 2).getCheckpoint().getNumber());
+        assertNotNull(board.getTile(1, 9).getCheckpoint());
+        assertEquals(2, board.getTile(1, 9).getCheckpoint().getNumber());
     }
 
     @Test
@@ -119,22 +141,22 @@ class BoardLoaderTest {
     void map2_hasLegacyGearDirections() {
         Board board = boardLoader.createDefaultBoard("map2");
 
-        assertNotNull(board.getTile(3, 8).getGear());
-        assertEquals(RotationDirection.COUNTERCLOCKWISE, board.getTile(3, 8).getGear().getRotation());
-        assertNotNull(board.getTile(10, 1).getGear());
-        assertEquals(RotationDirection.CLOCKWISE, board.getTile(10, 1).getGear().getRotation());
+        assertNotNull(board.getTile(8, 3).getGear());
+        assertEquals(RotationDirection.COUNTERCLOCKWISE, board.getTile(8, 3).getGear().getRotation());
+        assertNotNull(board.getTile(1, 10).getGear());
+        assertEquals(RotationDirection.CLOCKWISE, board.getTile(1, 10).getGear().getRotation());
     }
 
     @Test
     @DisplayName("Map4: checkpoints keep the underlying legacy conveyor metadata")
     void map4_checkpointPreservesUnderlyingConveyor() {
         Board board = boardLoader.createDefaultBoard("map4");
-        Tile checkpointTile = board.getTile(1, 10);
+        Tile checkpointTile = board.getTile(10, 1);
 
         assertNotNull(checkpointTile.getCheckpoint());
         assertEquals(1, checkpointTile.getCheckpoint().getNumber());
         assertNotNull(checkpointTile.getConveyorBelt());
-        assertEquals(Direction.EAST, checkpointTile.getConveyorBelt().getDirection());
+        assertEquals(Direction.SOUTH, checkpointTile.getConveyorBelt().getDirection());
         assertEquals(RotationDirection.COUNTERCLOCKWISE, checkpointTile.getConveyorBelt().getCurveRotation());
     }
 
@@ -148,7 +170,7 @@ class BoardLoaderTest {
         assertTrue(crossing.isExpress());
         assertTrue(crossing.isCrossing());
         assertEquals("LEFTRIGHT", crossing.getCrossingType());
-        assertEquals(Direction.WEST, crossing.getDirection());
+        assertEquals(Direction.NORTH, crossing.getDirection());
     }
 
     @Test
@@ -159,21 +181,21 @@ class BoardLoaderTest {
 
         assertNotNull(belt.getConveyorBelt());
         assertTrue(belt.getConveyorBelt().isExpress());
-        assertEquals(Direction.WEST, belt.getConveyorBelt().getDirection());
+        assertEquals(Direction.NORTH, belt.getConveyorBelt().getDirection());
     }
 
     @Test
     @DisplayName("Map5: laser source tiles keep walls and still mirror them to neighbors")
     void map5_laserSourcePreservesWallsAndMirroring() {
         Board board = boardLoader.createDefaultBoard("map5");
-        Tile sourceTile = board.getTile(9, 0);
+        Tile sourceTile = board.getTile(0, 9);
 
-        assertTrue(sourceTile.hasWall(Direction.NORTH));
-        assertTrue(sourceTile.hasWall(Direction.SOUTH));
-        assertTrue(board.getTile(9, 1).hasWall(Direction.NORTH));
+        assertTrue(sourceTile.hasWall(Direction.WEST));
+        assertTrue(sourceTile.hasWall(Direction.EAST));
+        assertTrue(board.getTile(1, 9).hasWall(Direction.WEST));
         assertTrue(board.getLasers().stream().anyMatch(laser ->
-                laser.getX() == 9 && laser.getY() == 0
-                        && laser.getDirection() == Direction.NORTH
+                laser.getX() == 0 && laser.getY() == 9
+                        && laser.getDirection() == Direction.WEST
                         && laser.getStrength() == 3));
     }
 
