@@ -1,14 +1,16 @@
 package com.roborally.server.service;
 
-import com.roborally.server.model.*;
-import com.roborally.common.enums.*;
-import org.junit.jupiter.api.*;
+import com.roborally.common.enums.Direction;
+import com.roborally.common.enums.RotationDirection;
+import com.roborally.server.model.Board;
+import com.roborally.server.model.ConveyorBelt;
+import com.roborally.server.model.Tile;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/**
- * Unit tests for BoardLoader.
- */
 class BoardLoaderTest {
 
     private BoardLoader boardLoader;
@@ -52,102 +54,76 @@ class BoardLoaderTest {
     }
 
     @Test
-    @DisplayName("Default board: has conveyor belts")
-    void defaultBoard_hasConveyors() {
-        Board board = boardLoader.createDefaultBoard("Test");
-        Tile belt = board.getTile(0, 5);
-
-        assertNotNull(belt.getConveyorBelt());
-        assertEquals(Direction.EAST, belt.getConveyorBelt().getDirection());
-        assertFalse(belt.getConveyorBelt().isExpress());
-    }
-
-    @Test
-    @DisplayName("Map5: has express belt")
-    void map5_hasExpressBelt() {
-        Board board = boardLoader.createDefaultBoard("map5");
-        Tile belt = board.getTile(11, 0);
-
-        assertNotNull(belt.getConveyorBelt());
-        assertTrue(belt.getConveyorBelt().isExpress());
-    }
-
-    @Test
-    @DisplayName("Map2: has gears")
-    void map2_hasGears() {
-        Board board = boardLoader.createDefaultBoard("map2");
-
-        assertNotNull(board.getTile(8, 3).getGear());
-        assertNotNull(board.getTile(8, 8).getGear());
-    }
-
-    @Test
-    @DisplayName("Default board: has pits")
-    void defaultBoard_hasPits() {
-        Board board = boardLoader.createDefaultBoard("Test");
-
-        assertTrue(board.getTile(9, 3).isPit());
-    }
-
-    @Test
-    @DisplayName("Default board: has walls")
-    void defaultBoard_hasWalls() {
-        Board board = boardLoader.createDefaultBoard("Test");
-
-        assertTrue(board.getTile(10, 3).hasWall(Direction.SOUTH));
-        assertTrue(board.getTile(10, 4).hasWall(Direction.NORTH));
-    }
-
-    @Test
-    @DisplayName("Default board: serializesToMap")
-    void defaultBoard_toMap() {
-        Board board = boardLoader.createDefaultBoard("Test");
-
-        var map = board.toMap();
-
-        assertEquals("Test", map.get("name"));
-        assertEquals(12, map.get("width"));
-        assertEquals(12, map.get("height"));
-        assertNotNull(map.get("tiles"));
-        assertNotNull(map.get("lasers"));
-    }
-
-    @Test
-    @DisplayName("Map1: preserves legacy checkpoint layout for single-board mode")
-    void map1_preservesLegacyCheckpoints() {
+    @DisplayName("Map1: legacy board only flips vertically, not rotate")
+    void map1_legacyCoordinatesAreVerticallyFlippedOnly() {
         Board board = boardLoader.createDefaultBoard("map1");
 
-        assertEquals(2, board.getTotalCheckpoints());
-        assertEquals(1, board.getTile(4, 1).getCheckpoint().getNumber());
-        assertEquals(2, board.getTile(7, 8).getCheckpoint().getNumber());
+        assertTrue(board.getTile(0, 0).isPit());
+        assertNotNull(board.getTile(0, 6).getConveyorBelt());
+        assertEquals(Direction.EAST, board.getTile(0, 6).getConveyorBelt().getDirection());
+        assertNotNull(board.getTile(5, 11).getConveyorBelt());
+        assertEquals(Direction.SOUTH, board.getTile(5, 11).getConveyorBelt().getDirection());
     }
 
     @Test
-    @DisplayName("Map1: synthetic start positions stay invisible")
-    void map1_syntheticStartsDoNotPaintTiles() {
+    @DisplayName("Map1: legacy checkpoint replacement clears the underlying belt tile")
+    void map1_checkpointReplacementClearsUnderlyingTile() {
+        Board board = boardLoader.createDefaultBoard("map1");
+        Tile checkpointTile = board.getTile(8, 7);
+
+        assertNotNull(checkpointTile.getCheckpoint());
+        assertEquals(2, checkpointTile.getCheckpoint().getNumber());
+        assertNull(checkpointTile.getConveyorBelt());
+        assertTrue(checkpointTile.hasWall(Direction.WEST));
+        assertTrue(checkpointTile.hasWall(Direction.NORTH));
+    }
+
+    @Test
+    @DisplayName("Map1: walls are mirrored on adjacent tiles")
+    void map1_mirrorsLegacyWalls() {
         Board board = boardLoader.createDefaultBoard("map1");
 
-        assertEquals(2, board.getStartPositions().size());
-        assertFalse(board.getTile(1, 11).isStart());
-        assertFalse(board.getTile(2, 11).isStart());
+        assertTrue(board.getTile(10, 9).hasWall(Direction.SOUTH));
+        assertTrue(board.getTile(10, 10).hasWall(Direction.NORTH));
     }
 
     @Test
-    @DisplayName("Map1: curve and crossing metadata matches legacy board")
+    @DisplayName("Map1: curve and crossing metadata matches legacy semantics")
     void map1_conveyorMetadataMatchesLegacyBoard() {
         Board board = boardLoader.createDefaultBoard("map1");
 
-        ConveyorBelt curve = board.getTile(11, 10).getConveyorBelt();
+        ConveyorBelt curve = board.getTile(10, 11).getConveyorBelt();
         assertNotNull(curve);
-        assertEquals(Direction.WEST, curve.getDirection());
+        assertEquals(Direction.NORTH, curve.getDirection());
         assertEquals(RotationDirection.CLOCKWISE, curve.getCurveRotation());
-        assertEquals(Direction.NORTH, curve.getCurveFrom());
 
-        ConveyorBelt crossing = board.getTile(6, 1).getConveyorBelt();
+        ConveyorBelt crossing = board.getTile(1, 6).getConveyorBelt();
         assertNotNull(crossing);
         assertTrue(crossing.isCrossing());
         assertEquals("RIGHT", crossing.getCrossingType());
-        assertEquals(Direction.SOUTH, crossing.getDirection());
+        assertEquals(Direction.EAST, crossing.getDirection());
+    }
+
+    @Test
+    @DisplayName("Map2: gear rotation directions match the old board")
+    void map2_hasLegacyGearDirections() {
+        Board board = boardLoader.createDefaultBoard("map2");
+
+        assertNotNull(board.getTile(3, 8).getGear());
+        assertEquals(RotationDirection.COUNTERCLOCKWISE, board.getTile(3, 8).getGear().getRotation());
+        assertNotNull(board.getTile(10, 1).getGear());
+        assertEquals(RotationDirection.CLOCKWISE, board.getTile(10, 1).getGear().getRotation());
+    }
+
+    @Test
+    @DisplayName("Map4: checkpoint replacement clears the old conveyor curve")
+    void map4_checkpointReplacementClearsUnderlyingConveyor() {
+        Board board = boardLoader.createDefaultBoard("map4");
+        Tile checkpointTile = board.getTile(1, 10);
+
+        assertNotNull(checkpointTile.getCheckpoint());
+        assertEquals(1, checkpointTile.getCheckpoint().getNumber());
+        assertNull(checkpointTile.getConveyorBelt());
     }
 
     @Test
@@ -160,7 +136,32 @@ class BoardLoaderTest {
         assertTrue(crossing.isExpress());
         assertTrue(crossing.isCrossing());
         assertEquals("LEFTRIGHT", crossing.getCrossingType());
-        assertEquals(Direction.NORTH, crossing.getDirection());
+        assertEquals(Direction.WEST, crossing.getDirection());
+    }
+
+    @Test
+    @DisplayName("Map5: has express belt")
+    void map5_hasExpressBelt() {
+        Board board = boardLoader.createDefaultBoard("map5");
+        Tile belt = board.getTile(11, 11);
+
+        assertNotNull(belt.getConveyorBelt());
+        assertTrue(belt.getConveyorBelt().isExpress());
+        assertEquals(Direction.WEST, belt.getConveyorBelt().getDirection());
+    }
+
+    @Test
+    @DisplayName("Default board: serializes to map")
+    void defaultBoard_toMap() {
+        Board board = boardLoader.createDefaultBoard("Test");
+
+        var map = board.toMap();
+
+        assertEquals("Test", map.get("name"));
+        assertEquals(12, map.get("width"));
+        assertEquals(12, map.get("height"));
+        assertNotNull(map.get("tiles"));
+        assertNotNull(map.get("lasers"));
     }
 
     @Test

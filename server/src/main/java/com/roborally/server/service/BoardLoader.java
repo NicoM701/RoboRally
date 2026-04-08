@@ -4,16 +4,12 @@ import com.roborally.common.enums.Direction;
 import com.roborally.common.enums.FieldType;
 import com.roborally.common.enums.RotationDirection;
 import com.roborally.server.model.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
 
 @Component
 public class BoardLoader {
-
-    private static final Logger log = LoggerFactory.getLogger(BoardLoader.class);
 
     public Board loadBoard(String boardName) {
         return createDefaultBoard(boardName);
@@ -58,93 +54,47 @@ public class BoardLoader {
         }
 
         board.setTotalCheckpoints(2);
-        applyLegacyConveyorMetadata(board, normalizedName);
-        calculateConveyorCurves(board);
         return board;
-    }
-
-    private void calculateConveyorCurves(Board board) {
-        for (int y = 0; y < board.getHeight(); y++) {
-            for (int x = 0; x < board.getWidth(); x++) {
-                Tile tile = board.getTile(x, y);
-                if (tile == null || tile.getConveyorBelt() == null) continue;
-
-                ConveyorBelt cb = tile.getConveyorBelt();
-                if (cb.isCrossing() || cb.getCurveRotation() != null || cb.getCurveFrom() != null) {
-                    continue;
-                }
-
-                Direction outDir = cb.getDirection();
-                List<Direction> inputDirs = new ArrayList<>();
-
-                for (Direction d : Direction.values()) {
-                    int nx = x + d.dx();
-                    int ny = y + d.dy();
-                    Tile neighbor = board.getTile(nx, ny);
-                    if (neighbor != null && neighbor.getConveyorBelt() != null
-                            && neighbor.getConveyorBelt().getDirection() == d.opposite()) {
-                        inputDirs.add(d);
-                    }
-                }
-
-                if (inputDirs.isEmpty()) {
-                    continue;
-                }
-
-                List<Direction> turningInputs = inputDirs.stream()
-                        .filter(inDir -> inDir.opposite() != outDir)
-                        .toList();
-
-                boolean hasStraightInput = inputDirs.stream()
-                        .anyMatch(inDir -> inDir.opposite() == outDir);
-
-                if (hasStraightInput || turningInputs.size() != 1) {
-                    continue;
-                }
-
-                Direction curveFrom = turningInputs.get(0);
-                RotationDirection rot = determineCurveRotation(curveFrom, outDir);
-                if (rot != null) {
-                    cb.setCurveFrom(curveFrom);
-                    cb.setCurveRotation(rot);
-                }
-            }
-        }
-    }
-
-    private RotationDirection determineCurveRotation(Direction curveFrom, Direction outDir) {
-        if (curveFrom.rotateClockwise() == outDir) {
-            return RotationDirection.CLOCKWISE;
-        }
-        if (curveFrom.rotateCounterClockwise() == outDir) {
-            return RotationDirection.COUNTERCLOCKWISE;
-        }
-        return null;
     }
 
     private enum LegacyOrientation {
         LEFT, RIGHT, TOP, BOTTOM
     }
 
+    private int legacyScreenY(Board board, int legacyY) {
+        return board.getHeight() - 1 - legacyY;
+    }
+
     private Tile legacyTile(Board board, int legacyX, int legacyY) {
-        return board.getTile(board.getWidth() - 1 - legacyY, legacyX);
+        return board.getTile(legacyX, legacyScreenY(board, legacyY));
+    }
+
+    private Tile replaceLegacyTile(Board board, int legacyX, int legacyY, FieldType type) {
+        int screenY = legacyScreenY(board, legacyY);
+        Tile tile = new Tile(legacyX, screenY, type);
+        board.setTile(legacyX, screenY, tile);
+        return tile;
     }
 
     private Direction legacyDirection(LegacyOrientation orientation) {
         return switch (orientation) {
-            case LEFT -> Direction.NORTH;
-            case RIGHT -> Direction.SOUTH;
-            case TOP -> Direction.WEST;
-            case BOTTOM -> Direction.EAST;
+            case LEFT -> Direction.WEST;
+            case RIGHT -> Direction.EAST;
+            case TOP -> Direction.NORTH;
+            case BOTTOM -> Direction.SOUTH;
+        };
+    }
+
+    private RotationDirection legacyGearRotation(LegacyOrientation orientation) {
+        return switch (orientation) {
+            case LEFT -> RotationDirection.COUNTERCLOCKWISE;
+            case RIGHT -> RotationDirection.CLOCKWISE;
+            default -> throw new IllegalArgumentException("Unsupported gear orientation: " + orientation);
         };
     }
 
     private RotationDirection legacyCurveRotation(int legacyCurve) {
         return legacyCurve == 2 ? RotationDirection.CLOCKWISE : RotationDirection.COUNTERCLOCKWISE;
-    }
-
-    private Direction curveFromFor(Direction outDir, RotationDirection rotation) {
-        return rotation == RotationDirection.CLOCKWISE ? outDir.rotateClockwise() : outDir.rotateCounterClockwise();
     }
 
     private String legacyCrossingType(int legacyCrossing) {
@@ -155,1022 +105,945 @@ public class BoardLoader {
         };
     }
 
-    private ConveyorBelt requireLegacyConveyor(Board board, int legacyX, int legacyY, LegacyOrientation orientation, boolean express) {
-        Tile tile = legacyTile(board, legacyX, legacyY);
-        if (tile == null || tile.getConveyorBelt() == null) {
-            throw new IllegalStateException("Missing conveyor at legacy tile (" + legacyX + ", " + legacyY + ")");
-        }
-
-        ConveyorBelt belt = tile.getConveyorBelt();
-        Direction expectedDirection = legacyDirection(orientation);
-        if (belt.getDirection() != expectedDirection || belt.isExpress() != express) {
-            throw new IllegalStateException(
-                    "Legacy conveyor mismatch at (" + legacyX + ", " + legacyY + "): expected "
-                            + expectedDirection + " express=" + express + " but found "
-                            + belt.getDirection() + " express=" + belt.isExpress());
-        }
-        return belt;
+    private void legacyPit(Board board, int legacyX, int legacyY) {
+        replaceLegacyTile(board, legacyX, legacyY, FieldType.PIT);
     }
 
-    private void annotateLegacyCurve(Board board, int legacyX, int legacyY, LegacyOrientation orientation, int legacyCurve, boolean express) {
-        ConveyorBelt belt = requireLegacyConveyor(board, legacyX, legacyY, orientation, express);
-        RotationDirection rotation = legacyCurveRotation(legacyCurve);
-        belt.setCrossing(false);
-        belt.setCurveRotation(rotation);
-        belt.setCurveFrom(curveFromFor(belt.getDirection(), rotation));
+    private void legacyRepair(Board board, int legacyX, int legacyY, int level) {
+        replaceLegacyTile(board, legacyX, legacyY, level == 2 ? FieldType.REPAIR_2 : FieldType.REPAIR_1);
     }
 
-    private void annotateLegacyCrossing(Board board, int legacyX, int legacyY, LegacyOrientation orientation, int legacyCrossing, boolean express) {
-        ConveyorBelt belt = requireLegacyConveyor(board, legacyX, legacyY, orientation, express);
-        belt.setCurveRotation(null);
-        belt.setCurveFrom(null);
+    private void legacyCheckpoint(Board board, int legacyX, int legacyY, int number) {
+        replaceLegacyTile(board, legacyX, legacyY, FieldType.FLOOR).setCheckpoint(new Checkpoint(number));
+    }
+
+    private void legacyConveyor(Board board, int legacyX, int legacyY, LegacyOrientation orientation, boolean express) {
+        replaceLegacyTile(board, legacyX, legacyY, FieldType.FLOOR)
+                .setConveyorBelt(new ConveyorBelt(legacyDirection(orientation), express));
+    }
+
+    private void legacyCurve(Board board, int legacyX, int legacyY, LegacyOrientation orientation, int legacyCurve, boolean express) {
+        ConveyorBelt belt = new ConveyorBelt(legacyDirection(orientation), express);
+        belt.setCurveRotation(legacyCurveRotation(legacyCurve));
+        replaceLegacyTile(board, legacyX, legacyY, FieldType.FLOOR).setConveyorBelt(belt);
+    }
+
+    private void legacyCrossing(Board board, int legacyX, int legacyY, LegacyOrientation orientation, int legacyCrossing, boolean express) {
+        ConveyorBelt belt = new ConveyorBelt(legacyDirection(orientation), express);
         belt.setCrossingType(legacyCrossingType(legacyCrossing));
+        replaceLegacyTile(board, legacyX, legacyY, FieldType.FLOOR).setConveyorBelt(belt);
     }
 
-    private void applyLegacyConveyorMetadata(Board board, String boardName) {
-        switch (boardName) {
-            case "map1" -> applyMap1ConveyorMetadata(board);
-            case "map3" -> applyMap3ConveyorMetadata(board);
-            case "map4" -> applyMap4ConveyorMetadata(board);
-            case "map5" -> applyMap5ConveyorMetadata(board);
-            case "map6" -> applyMap6ConveyorMetadata(board);
-            default -> {
+    private void legacyGear(Board board, int legacyX, int legacyY, LegacyOrientation orientation) {
+        replaceLegacyTile(board, legacyX, legacyY, FieldType.FLOOR)
+                .setGear(new Gear(legacyGearRotation(orientation)));
+    }
+
+    private void legacyPusher(Board board, int legacyX, int legacyY, LegacyOrientation orientation, int activeStep) {
+        replaceLegacyTile(board, legacyX, legacyY, FieldType.FLOOR)
+                .setPusher(new Pusher(legacyDirection(orientation), Set.of(activeStep)));
+    }
+
+    private void legacyPress(Board board, int legacyX, int legacyY, int activeStep) {
+        replaceLegacyTile(board, legacyX, legacyY, FieldType.FLOOR)
+                .setPress(new Press(Set.of(activeStep)));
+    }
+
+    private void legacyWall(Board board, int legacyX, int legacyY, LegacyOrientation orientation) {
+        legacyTile(board, legacyX, legacyY).addWall(legacyDirection(orientation));
+    }
+
+    private void legacyLaser(Board board, int legacyX, int legacyY, LegacyOrientation orientation, int power) {
+        int screenY = legacyScreenY(board, legacyY);
+        replaceLegacyTile(board, legacyX, legacyY, FieldType.FLOOR);
+        board.addLaser(new Laser(legacyX, screenY, legacyDirection(orientation), power));
+    }
+
+    private void legacyMirrorWalls(Board board) {
+        for (int y = 0; y < board.getHeight(); y++) {
+            for (int x = 0; x < board.getWidth(); x++) {
+                Tile tile = board.getTile(x, y);
+                if (tile == null) continue;
+                for (Direction wall : tile.getWalls()) {
+                    Tile neighbor = board.getTile(x + wall.dx(), y + wall.dy());
+                    if (neighbor != null) {
+                        neighbor.addWall(wall.opposite());
+                    }
+                }
             }
         }
     }
 
-    private void applyMap1ConveyorMetadata(Board board) {
-        annotateLegacyCurve(board, 10, 0, LegacyOrientation.TOP, 2, false);
-        annotateLegacyCurve(board, 11, 0, LegacyOrientation.RIGHT, 1, false);
-        annotateLegacyCurve(board, 1, 1, LegacyOrientation.RIGHT, 1, false);
-        annotateLegacyCurve(board, 11, 1, LegacyOrientation.TOP, 2, false);
-        annotateLegacyCurve(board, 6, 4, LegacyOrientation.TOP, 2, false);
-        annotateLegacyCurve(board, 7, 4, LegacyOrientation.RIGHT, 1, false);
-        annotateLegacyCrossing(board, 1, 5, LegacyOrientation.RIGHT, 2, false);
-        annotateLegacyCurve(board, 5, 5, LegacyOrientation.RIGHT, 2, false);
-        annotateLegacyCurve(board, 7, 5, LegacyOrientation.TOP, 2, false);
-        annotateLegacyCurve(board, 4, 6, LegacyOrientation.BOTTOM, 2, false);
-        annotateLegacyCurve(board, 8, 6, LegacyOrientation.LEFT, 2, false);
-        annotateLegacyCrossing(board, 10, 6, LegacyOrientation.LEFT, 2, false);
-        annotateLegacyCurve(board, 4, 7, LegacyOrientation.LEFT, 1, false);
-        annotateLegacyCurve(board, 5, 7, LegacyOrientation.BOTTOM, 2, false);
-        annotateLegacyCurve(board, 7, 7, LegacyOrientation.LEFT, 2, false);
-        annotateLegacyCurve(board, 8, 7, LegacyOrientation.TOP, 1, false);
-        annotateLegacyCurve(board, 6, 8, LegacyOrientation.LEFT, 2, false);
-        annotateLegacyCurve(board, 7, 8, LegacyOrientation.TOP, 1, false);
-        annotateLegacyCurve(board, 1, 10, LegacyOrientation.BOTTOM, 2, false);
-        annotateLegacyCurve(board, 10, 10, LegacyOrientation.LEFT, 1, false);
-    }
-
-    private void applyMap3ConveyorMetadata(Board board) {
-        annotateLegacyCrossing(board, 5, 3, LegacyOrientation.RIGHT, 1, false);
-        annotateLegacyCrossing(board, 6, 8, LegacyOrientation.LEFT, 1, false);
-    }
-
-    private void applyMap4ConveyorMetadata(Board board) {
-        annotateLegacyCrossing(board, 1, 5, LegacyOrientation.TOP, 1, false);
-        annotateLegacyCrossing(board, 10, 6, LegacyOrientation.BOTTOM, 1, true);
-        annotateLegacyCrossing(board, 6, 1, LegacyOrientation.LEFT, 1, true);
-        annotateLegacyCrossing(board, 5, 10, LegacyOrientation.RIGHT, 1, false);
-        annotateLegacyCurve(board, 1, 1, LegacyOrientation.RIGHT, 1, false);
-        annotateLegacyCurve(board, 2, 1, LegacyOrientation.LEFT, 2, true);
-        annotateLegacyCrossing(board, 10, 1, LegacyOrientation.LEFT, 3, true);
-        annotateLegacyCurve(board, 3, 2, LegacyOrientation.LEFT, 2, false);
-        annotateLegacyCurve(board, 9, 2, LegacyOrientation.BOTTOM, 2, false);
-        annotateLegacyCurve(board, 4, 3, LegacyOrientation.LEFT, 2, true);
-        annotateLegacyCurve(board, 8, 3, LegacyOrientation.BOTTOM, 2, true);
-        annotateLegacyCurve(board, 5, 4, LegacyOrientation.LEFT, 2, false);
-        annotateLegacyCurve(board, 7, 4, LegacyOrientation.BOTTOM, 2, false);
-        annotateLegacyCurve(board, 4, 7, LegacyOrientation.TOP, 2, true);
-        annotateLegacyCurve(board, 6, 7, LegacyOrientation.RIGHT, 2, true);
-        annotateLegacyCurve(board, 3, 8, LegacyOrientation.TOP, 2, false);
-        annotateLegacyCurve(board, 7, 8, LegacyOrientation.RIGHT, 2, false);
-        annotateLegacyCurve(board, 2, 9, LegacyOrientation.TOP, 2, true);
-        annotateLegacyCurve(board, 8, 9, LegacyOrientation.RIGHT, 2, true);
-        annotateLegacyCrossing(board, 1, 10, LegacyOrientation.RIGHT, 3, false);
-        annotateLegacyCurve(board, 9, 10, LegacyOrientation.RIGHT, 2, false);
-        annotateLegacyCurve(board, 10, 10, LegacyOrientation.LEFT, 1, true);
-    }
-
-    private void applyMap5ConveyorMetadata(Board board) {
-        annotateLegacyCurve(board, 4, 0, LegacyOrientation.BOTTOM, 1, false);
-        annotateLegacyCurve(board, 5, 0, LegacyOrientation.RIGHT, 2, false);
-        annotateLegacyCrossing(board, 6, 0, LegacyOrientation.TOP, 2, false);
-        annotateLegacyCrossing(board, 10, 0, LegacyOrientation.LEFT, 1, true);
-        annotateLegacyCrossing(board, 0, 1, LegacyOrientation.TOP, 1, true);
-        annotateLegacyCrossing(board, 11, 3, LegacyOrientation.TOP, 2, false);
-        annotateLegacyCrossing(board, 0, 5, LegacyOrientation.RIGHT, 2, true);
-        annotateLegacyCrossing(board, 4, 5, LegacyOrientation.BOTTOM, 2, false);
-        annotateLegacyCurve(board, 9, 5, LegacyOrientation.RIGHT, 2, true);
-        annotateLegacyCurve(board, 11, 5, LegacyOrientation.TOP, 2, false);
-        annotateLegacyCrossing(board, 6, 6, LegacyOrientation.TOP, 2, false);
-        annotateLegacyCrossing(board, 11, 6, LegacyOrientation.LEFT, 2, true);
-        annotateLegacyCurve(board, 5, 10, LegacyOrientation.LEFT, 1, false);
-        annotateLegacyCurve(board, 6, 10, LegacyOrientation.TOP, 1, false);
-        annotateLegacyCrossing(board, 11, 10, LegacyOrientation.BOTTOM, 1, true);
-        annotateLegacyCrossing(board, 1, 11, LegacyOrientation.RIGHT, 1, true);
-        annotateLegacyCrossing(board, 4, 11, LegacyOrientation.BOTTOM, 3, false);
-        annotateLegacyCurve(board, 5, 11, LegacyOrientation.BOTTOM, 2, false);
-    }
-
-    private void applyMap6ConveyorMetadata(Board board) {
-        annotateLegacyCurve(board, 4, 0, LegacyOrientation.BOTTOM, 1, false);
-        annotateLegacyCurve(board, 5, 0, LegacyOrientation.RIGHT, 2, false);
-        annotateLegacyCrossing(board, 1, 1, LegacyOrientation.BOTTOM, 2, false);
-        annotateLegacyCurve(board, 1, 2, LegacyOrientation.LEFT, 1, false);
-        annotateLegacyCurve(board, 2, 2, LegacyOrientation.BOTTOM, 2, false);
-        annotateLegacyCurve(board, 6, 2, LegacyOrientation.TOP, 2, false);
-        annotateLegacyCurve(board, 7, 2, LegacyOrientation.RIGHT, 1, false);
-        annotateLegacyCurve(board, 1, 4, LegacyOrientation.BOTTOM, 1, false);
-        annotateLegacyCurve(board, 2, 4, LegacyOrientation.RIGHT, 2, false);
-        annotateLegacyCurve(board, 7, 4, LegacyOrientation.TOP, 2, false);
-        annotateLegacyCurve(board, 8, 4, LegacyOrientation.RIGHT, 1, false);
-        annotateLegacyCurve(board, 1, 5, LegacyOrientation.RIGHT, 2, false);
-        annotateLegacyCurve(board, 3, 5, LegacyOrientation.BOTTOM, 1, false);
-        annotateLegacyCurve(board, 4, 5, LegacyOrientation.RIGHT, 2, false);
-        annotateLegacyCurve(board, 8, 5, LegacyOrientation.TOP, 2, false);
-        annotateLegacyCurve(board, 2, 7, LegacyOrientation.BOTTOM, 1, false);
-        annotateLegacyCurve(board, 3, 7, LegacyOrientation.RIGHT, 2, false);
-        annotateLegacyCurve(board, 5, 9, LegacyOrientation.BOTTOM, 1, false);
-        annotateLegacyCurve(board, 7, 9, LegacyOrientation.RIGHT, 1, false);
-        annotateLegacyCurve(board, 1, 10, LegacyOrientation.BOTTOM, 1, false);
-        annotateLegacyCurve(board, 2, 10, LegacyOrientation.RIGHT, 2, false);
-        annotateLegacyCurve(board, 10, 10, LegacyOrientation.LEFT, 2, false);
-        annotateLegacyCurve(board, 6, 11, LegacyOrientation.LEFT, 2, false);
-        annotateLegacyCurve(board, 7, 11, LegacyOrientation.TOP, 1, false);
-    }
-
-    private void setLaserField(Board board, int x, int y, Direction dir, int strength) {
-        board.addLaser(new Laser(x, y, dir, strength));
-    }
-
     private void generateMap1(Board board, int numberCheckpoint, boolean only1Map) {
-
-board.getTile(11, 2).addWall(Direction.EAST);
-board.getTile(11, 4).addWall(Direction.EAST);
-board.getTile(11, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(11, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(11, 7).addWall(Direction.EAST);
-board.getTile(11, 9).addWall(Direction.EAST);
-board.getTile(11, 10).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(11, 11).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(10, 0).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(10, 1).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(10, 3).addWall(Direction.SOUTH);
-board.getTile(10, 4).addWall(Direction.NORTH);
-board.getTile(10, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(10, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(10, 7).addWall(Direction.SOUTH);
-board.getTile(10, 8).addWall(Direction.NORTH);
-board.getTile(10, 10).setFieldType(FieldType.REPAIR_1);
-board.getTile(10, 10).addWall(Direction.WEST);
-board.getTile(10, 11).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(9, 0).addWall(Direction.NORTH);
-board.getTile(9, 1).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(9, 3).setFieldType(FieldType.PIT);
-board.getTile(9, 3).addWall(Direction.WEST);
-board.getTile(9, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(9, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(9, 6).addWall(Direction.SOUTH);
-board.getTile(9, 7).addWall(Direction.NORTH);
-board.getTile(9, 9).setFieldType(FieldType.PIT);
-board.getTile(9, 10).addWall(Direction.SOUTH);
-board.getTile(9, 10).addWall(Direction.EAST);
-board.getTile(9, 11).addWall(Direction.NORTH);
-board.getTile(9, 11).addWall(Direction.SOUTH);
-board.getTile(8, 0).addWall(Direction.WEST);
-board.getTile(8, 1).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(8, 2).addWall(Direction.WEST);
-board.getTile(8, 3).addWall(Direction.EAST);
-board.getTile(8, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(8, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(8, 7).addWall(Direction.SOUTH);
-board.getTile(8, 8).addWall(Direction.NORTH);
-board.getTile(8, 10).addWall(Direction.SOUTH);
-board.getTile(8, 11).addWall(Direction.NORTH);
-board.getTile(7, 0).addWall(Direction.NORTH);
-board.getTile(7, 0).addWall(Direction.EAST);
-board.getTile(7, 1).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(7, 2).addWall(Direction.EAST);
-board.getTile(7, 3).addWall(Direction.WEST);
-board.getTile(7, 4).addWall(Direction.WEST);
-board.getTile(7, 4).addWall(Direction.SOUTH);
-board.getTile(7, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(7, 5).addWall(Direction.NORTH);
-board.getTile(7, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(7, 7).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(7, 7).addWall(Direction.SOUTH);
-board.getTile(7, 8).addWall(Direction.NORTH);
-board.getTile(7, 8).addWall(Direction.WEST);
-board.getTile(7, 9).addWall(Direction.WEST);
-board.getTile(7, 11).addWall(Direction.SOUTH);
-board.getTile(6, 0).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(6, 1).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, true));
-board.getTile(6, 2).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(6, 3).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(6, 3).addWall(Direction.EAST);
-board.getTile(6, 4).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(6, 4).addWall(Direction.EAST);
-board.getTile(6, 5).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(6, 6).setFieldType(FieldType.PIT);
-board.getTile(6, 7).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(6, 8).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(6, 8).addWall(Direction.EAST);
-board.getTile(6, 9).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(6, 9).addWall(Direction.EAST);
-board.getTile(6, 10).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(6, 11).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(5, 0).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(5, 1).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(5, 2).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(5, 3).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(5, 4).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(5, 5).setFieldType(FieldType.PIT);
-board.getTile(5, 6).setFieldType(FieldType.PIT);
-board.getTile(5, 7).setFieldType(FieldType.PIT);
-board.getTile(5, 8).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(5, 9).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(5, 10).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, true));
-board.getTile(5, 11).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(4, 0).addWall(Direction.NORTH);
-board.getTile(4, 3).addWall(Direction.WEST);
-board.getTile(4, 3).addWall(Direction.SOUTH);
-board.getTile(4, 4).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(4, 4).addWall(Direction.NORTH);
-board.getTile(4, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(4, 6).setFieldType(FieldType.PIT);
-board.getTile(4, 7).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(4, 8).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(4, 8).addWall(Direction.WEST);
-board.getTile(4, 8).addWall(Direction.SOUTH);
-board.getTile(4, 9).addWall(Direction.NORTH);
-board.getTile(4, 10).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(4, 11).addWall(Direction.SOUTH);
-board.getTile(3, 3).addWall(Direction.EAST);
-board.getTile(3, 3).addWall(Direction.SOUTH);
-board.getTile(3, 4).addWall(Direction.NORTH);
-board.getTile(3, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(3, 6).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(3, 7).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(3, 7).addWall(Direction.WEST);
-board.getTile(3, 7).addWall(Direction.SOUTH);
-board.getTile(3, 8).addWall(Direction.NORTH);
-board.getTile(3, 8).addWall(Direction.EAST);
-board.getTile(3, 10).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(2, 0).addWall(Direction.NORTH);
-board.getTile(2, 1).setFieldType(FieldType.PIT);
-board.getTile(2, 1).addWall(Direction.SOUTH);
-board.getTile(2, 2).addWall(Direction.NORTH);
-board.getTile(2, 3).addWall(Direction.WEST);
-board.getTile(2, 4).addWall(Direction.SOUTH);
-board.getTile(2, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(2, 5).addWall(Direction.NORTH);
-board.getTile(2, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(2, 7).setFieldType(FieldType.PIT);
-board.getTile(2, 7).addWall(Direction.EAST);
-board.getTile(2, 8).addWall(Direction.WEST);
-board.getTile(2, 9).setFieldType(FieldType.REPAIR_2);
-board.getTile(2, 10).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(2, 11).addWall(Direction.SOUTH);
-board.getTile(1, 0).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(1, 1).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(1, 3).addWall(Direction.SOUTH);
-board.getTile(1, 3).addWall(Direction.EAST);
-board.getTile(1, 4).addWall(Direction.NORTH);
-board.getTile(1, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(1, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(1, 7).setFieldType(FieldType.PIT);
-board.getTile(1, 7).addWall(Direction.SOUTH);
-board.getTile(1, 8).addWall(Direction.NORTH);
-board.getTile(1, 8).addWall(Direction.EAST);
-board.getTile(1, 10).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(1, 11).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(0, 0).setFieldType(FieldType.PIT);
-board.getTile(0, 1).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(1, 3).setFieldType(FieldType.REPAIR_1);
-board.getTile(0, 2).addWall(Direction.WEST);
-board.getTile(0, 4).addWall(Direction.WEST);
-board.getTile(0, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(0, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(0, 7).addWall(Direction.WEST);
-board.getTile(0, 9).addWall(Direction.WEST);
-board.getTile(4, 1).setCheckpoint(new Checkpoint(1));
-if (numberCheckpoint == 1) {
-    if (only1Map) {
-        board.getTile(7, 8).setCheckpoint(new Checkpoint(2));
-    }
-}
-setLaserField(board, 8, 8, Direction.SOUTH, 2);
-setLaserField(board, 7, 3, Direction.EAST, 1);
-setLaserField(board, 4, 9, Direction.SOUTH, 1);
-setLaserField(board, 2, 3, Direction.EAST, 1);
+                legacyWall(board, 2, 0, LegacyOrientation.BOTTOM);
+                legacyWall(board, 4, 0, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 5, 0, LegacyOrientation.BOTTOM, false);
+                legacyConveyor(board, 6, 0, LegacyOrientation.TOP, false);
+                legacyWall(board, 7, 0, LegacyOrientation.BOTTOM);
+                legacyWall(board, 9, 0, LegacyOrientation.BOTTOM);
+                legacyCurve(board, 10, 0, LegacyOrientation.TOP, 2, false);
+                legacyCurve(board, 11, 0, LegacyOrientation.RIGHT, 1, false);
+                legacyConveyor(board, 0, 1, LegacyOrientation.RIGHT, false);
+                legacyCurve(board, 1, 1, LegacyOrientation.RIGHT, 1, false);
+                legacyWall(board, 3, 1, LegacyOrientation.RIGHT);
+                legacyWall(board, 4, 1, LegacyOrientation.LEFT);
+                legacyConveyor(board, 5, 1, LegacyOrientation.BOTTOM, false);
+                legacyConveyor(board, 6, 1, LegacyOrientation.TOP, false);
+                legacyWall(board, 7, 1, LegacyOrientation.RIGHT);
+                legacyWall(board, 8, 1, LegacyOrientation.LEFT);
+                legacyRepair(board, 10, 1, 1);
+                legacyWall(board, 10, 1, LegacyOrientation.TOP);
+                legacyCurve(board, 11, 1, LegacyOrientation.TOP, 2, false);
+                legacyWall(board, 0, 2, LegacyOrientation.LEFT);
+                legacyConveyor(board, 1, 2, LegacyOrientation.TOP, false);
+                legacyPit(board, 3, 2);
+                legacyWall(board, 3, 2, LegacyOrientation.TOP);
+                legacyConveyor(board, 5, 2, LegacyOrientation.BOTTOM, false);
+                legacyConveyor(board, 6, 2, LegacyOrientation.TOP, false);
+                legacyWall(board, 6, 2, LegacyOrientation.RIGHT);
+                legacyWall(board, 7, 2, LegacyOrientation.LEFT);
+                legacyPit(board, 9, 2);
+                legacyWall(board, 10, 2, LegacyOrientation.RIGHT);
+                legacyWall(board, 10, 2, LegacyOrientation.BOTTOM);
+                legacyWall(board, 11, 2, LegacyOrientation.LEFT);
+                legacyWall(board, 11, 2, LegacyOrientation.RIGHT);
+                legacyWall(board, 0, 3, LegacyOrientation.TOP);
+                legacyConveyor(board, 1, 3, LegacyOrientation.TOP, false);
+                legacyWall(board, 2, 3, LegacyOrientation.TOP);
+                legacyWall(board, 3, 3, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 5, 3, LegacyOrientation.BOTTOM, false);
+                legacyConveyor(board, 6, 3, LegacyOrientation.TOP, false);
+                legacyWall(board, 7, 3, LegacyOrientation.RIGHT);
+                legacyWall(board, 8, 3, LegacyOrientation.LEFT);
+                legacyWall(board, 10, 3, LegacyOrientation.RIGHT);
+                legacyWall(board, 11, 3, LegacyOrientation.LEFT);
+                legacyWall(board, 0, 4, LegacyOrientation.LEFT);
+                legacyWall(board, 0, 4, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 1, 4, LegacyOrientation.TOP, false);
+                legacyWall(board, 2, 4, LegacyOrientation.BOTTOM);
+                legacyWall(board, 3, 4, LegacyOrientation.TOP);
+                legacyWall(board, 4, 4, LegacyOrientation.TOP);
+                legacyWall(board, 4, 4, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 5, 4, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 5, 4, LegacyOrientation.LEFT);
+                legacyCurve(board, 6, 4, LegacyOrientation.TOP, 2, false);
+                legacyCurve(board, 7, 4, LegacyOrientation.RIGHT, 1, false);
+                legacyWall(board, 7, 4, LegacyOrientation.RIGHT);
+                legacyWall(board, 8, 4, LegacyOrientation.LEFT);
+                legacyWall(board, 8, 4, LegacyOrientation.TOP);
+                legacyWall(board, 9, 4, LegacyOrientation.TOP);
+                legacyWall(board, 11, 4, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 0, 5, LegacyOrientation.RIGHT, false);
+                legacyCrossing(board, 1, 5, LegacyOrientation.RIGHT, 2, false);
+                legacyConveyor(board, 2, 5, LegacyOrientation.RIGHT, false);
+                legacyConveyor(board, 3, 5, LegacyOrientation.RIGHT, false);
+                legacyWall(board, 3, 5, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 4, 5, LegacyOrientation.RIGHT, false);
+                legacyWall(board, 4, 5, LegacyOrientation.BOTTOM);
+                legacyCurve(board, 5, 5, LegacyOrientation.RIGHT, 2, false);
+                legacyPit(board, 6, 5);
+                legacyCurve(board, 7, 5, LegacyOrientation.TOP, 2, false);
+                legacyConveyor(board, 8, 5, LegacyOrientation.RIGHT, false);
+                legacyWall(board, 8, 5, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 9, 5, LegacyOrientation.RIGHT, false);
+                legacyWall(board, 9, 5, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 10, 5, LegacyOrientation.RIGHT, false);
+                legacyConveyor(board, 11, 5, LegacyOrientation.RIGHT, false);
+                legacyConveyor(board, 0, 6, LegacyOrientation.LEFT, false);
+                legacyConveyor(board, 1, 6, LegacyOrientation.LEFT, false);
+                legacyConveyor(board, 2, 6, LegacyOrientation.LEFT, false);
+                legacyConveyor(board, 3, 6, LegacyOrientation.LEFT, false);
+                legacyCurve(board, 4, 6, LegacyOrientation.BOTTOM, 2, false);
+                legacyPit(board, 5, 6);
+                legacyPit(board, 6, 6);
+                legacyPit(board, 7, 6);
+                legacyCurve(board, 8, 6, LegacyOrientation.LEFT, 2, false);
+                legacyConveyor(board, 9, 6, LegacyOrientation.LEFT, false);
+                legacyCrossing(board, 10, 6, LegacyOrientation.LEFT, 2, false);
+                legacyConveyor(board, 11, 6, LegacyOrientation.LEFT, false);
+                legacyWall(board, 0, 7, LegacyOrientation.LEFT);
+                legacyWall(board, 3, 7, LegacyOrientation.TOP);
+                legacyWall(board, 3, 7, LegacyOrientation.RIGHT);
+                legacyCurve(board, 4, 7, LegacyOrientation.LEFT, 1, false);
+                legacyWall(board, 4, 7, LegacyOrientation.LEFT);
+                legacyCurve(board, 5, 7, LegacyOrientation.BOTTOM, 2, false);
+                legacyPit(board, 6, 7);
+                legacyCurve(board, 7, 7, LegacyOrientation.LEFT, 2, false);
+                legacyCurve(board, 8, 7, LegacyOrientation.TOP, 1, false);
+                legacyWall(board, 8, 7, LegacyOrientation.TOP);
+                legacyWall(board, 8, 7, LegacyOrientation.RIGHT);
+                legacyWall(board, 9, 7, LegacyOrientation.LEFT);
+                legacyConveyor(board, 10, 7, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 11, 7, LegacyOrientation.RIGHT);
+                legacyWall(board, 3, 8, LegacyOrientation.BOTTOM);
+                legacyWall(board, 3, 8, LegacyOrientation.RIGHT);
+                legacyWall(board, 4, 8, LegacyOrientation.LEFT);
+                legacyConveyor(board, 5, 8, LegacyOrientation.BOTTOM, false);
+                legacyCurve(board, 6, 8, LegacyOrientation.LEFT, 2, false);
+                legacyCurve(board, 7, 8, LegacyOrientation.TOP, 1, false);
+                legacyWall(board, 7, 8, LegacyOrientation.TOP);
+                legacyWall(board, 7, 8, LegacyOrientation.RIGHT);
+                legacyWall(board, 8, 8, LegacyOrientation.LEFT);
+                legacyWall(board, 8, 8, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 10, 8, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 0, 9, LegacyOrientation.LEFT);
+                legacyPit(board, 1, 9);
+                legacyWall(board, 1, 9, LegacyOrientation.RIGHT);
+                legacyWall(board, 2, 9, LegacyOrientation.LEFT);
+                legacyWall(board, 3, 9, LegacyOrientation.TOP);
+                legacyWall(board, 4, 9, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 5, 9, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 5, 9, LegacyOrientation.LEFT);
+                legacyConveyor(board, 6, 9, LegacyOrientation.TOP, false);
+                legacyPit(board, 7, 9);
+                legacyWall(board, 7, 9, LegacyOrientation.BOTTOM);
+                legacyWall(board, 8, 9, LegacyOrientation.TOP);
+                legacyRepair(board, 9, 9, 2);
+                legacyConveyor(board, 10, 9, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 11, 9, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 0, 10, LegacyOrientation.LEFT, false);
+                legacyCurve(board, 1, 10, LegacyOrientation.BOTTOM, 2, false);
+                legacyWall(board, 3, 10, LegacyOrientation.RIGHT);
+                legacyWall(board, 3, 10, LegacyOrientation.BOTTOM);
+                legacyWall(board, 4, 10, LegacyOrientation.LEFT);
+                legacyConveyor(board, 5, 10, LegacyOrientation.BOTTOM, false);
+                legacyConveyor(board, 6, 10, LegacyOrientation.TOP, false);
+                legacyPit(board, 7, 10);
+                legacyWall(board, 7, 10, LegacyOrientation.RIGHT);
+                legacyWall(board, 8, 10, LegacyOrientation.LEFT);
+                legacyWall(board, 8, 10, LegacyOrientation.BOTTOM);
+                legacyCurve(board, 10, 10, LegacyOrientation.LEFT, 1, false);
+                legacyConveyor(board, 11, 10, LegacyOrientation.LEFT, false);
+                legacyPit(board, 0, 11);
+                legacyConveyor(board, 1, 11, LegacyOrientation.BOTTOM, false);
+                legacyRepair(board, 3, 10, 1);
+                legacyWall(board, 2, 11, LegacyOrientation.TOP);
+                legacyWall(board, 4, 11, LegacyOrientation.TOP);
+                legacyConveyor(board, 5, 11, LegacyOrientation.BOTTOM, false);
+                legacyConveyor(board, 6, 11, LegacyOrientation.TOP, false);
+                legacyWall(board, 7, 11, LegacyOrientation.TOP);
+                legacyWall(board, 9, 11, LegacyOrientation.TOP);
+                legacyCheckpoint(board, 1, 7, 1);
+                if (numberCheckpoint == 1) {
+                        if (only1Map) {
+                                legacyCheckpoint(board, 8, 4, 2);
+                        }
+                }
+                legacyMirrorWalls(board);
+                legacyLaser(board, 8, 3, LegacyOrientation.RIGHT, 2);
+                legacyLaser(board, 3, 4, LegacyOrientation.BOTTOM, 1);
+                legacyLaser(board, 9, 7, LegacyOrientation.RIGHT, 1);
+                legacyLaser(board, 3, 9, LegacyOrientation.BOTTOM, 1);
+                legacyMirrorWalls(board);
     }
 
     private void generateMap2(Board board, int numberCheckpoint, boolean only1Map) {
-
-board.getTile(11, 1).addWall(Direction.WEST);
-board.getTile(11, 2).addWall(Direction.EAST);
-board.getTile(11, 3).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(11, 4).addWall(Direction.EAST);
-board.getTile(11, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, true, null, false));
-board.getTile(11, 7).addWall(Direction.EAST);
-board.getTile(11, 8).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(11, 9).addWall(Direction.EAST);
-board.getTile(11, 10).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(10, 0).setFieldType(FieldType.PIT);
-board.getTile(10, 1).addWall(Direction.EAST);
-board.getTile(10, 2).addWall(Direction.SOUTH);
-board.getTile(10, 3).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(10, 3).addWall(Direction.NORTH);
-board.getTile(10, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, true, null, false));
-board.getTile(10, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(10, 8).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(10, 10).setFieldType(FieldType.REPAIR_1);
-board.getTile(10, 11).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(9, 0).addWall(Direction.NORTH);
-board.getTile(9, 3).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(9, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, true, null, false));
-board.getTile(9, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(9, 8).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(9, 10).addWall(Direction.WEST);
-board.getTile(9, 11).addWall(Direction.SOUTH);
-board.getTile(8, 0).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(8, 1).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(8, 2).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(8, 3).setGear(new Gear(RotationDirection.COUNTERCLOCKWISE));
-board.getTile(8, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, true, null, false));
-board.getTile(8, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(8, 8).setGear(new Gear(RotationDirection.COUNTERCLOCKWISE));
-board.getTile(8, 9).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(8, 10).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(8, 10).addWall(Direction.EAST);
-board.getTile(8, 11).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(7, 0).addWall(Direction.NORTH);
-board.getTile(7, 4).addWall(Direction.WEST);
-board.getTile(7, 4).addWall(Direction.SOUTH);
-board.getTile(7, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, true, null, false));
-board.getTile(7, 5).addWall(Direction.NORTH);
-board.getTile(7, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(7, 6).addWall(Direction.SOUTH);
-board.getTile(7, 7).setFieldType(FieldType.REPAIR_2);
-board.getTile(7, 7).addWall(Direction.WEST);
-board.getTile(7, 7).addWall(Direction.NORTH);
-board.getTile(7, 11).addWall(Direction.SOUTH);
-board.getTile(6, 1).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(6, 2).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(6, 3).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(6, 4).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(6, 4).addWall(Direction.EAST);
-board.getTile(6, 7).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, true, null, false));
-board.getTile(6, 7).addWall(Direction.EAST);
-board.getTile(6, 8).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, true, null, false));
-board.getTile(6, 9).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, true, null, false));
-board.getTile(6, 10).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, true, null, false));
-board.getTile(6, 11).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, true, null, false));
-board.getTile(5, 0).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(5, 1).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(5, 2).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(5, 3).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(5, 4).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(5, 4).addWall(Direction.WEST);
-board.getTile(5, 7).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(5, 7).addWall(Direction.WEST);
-board.getTile(5, 8).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(5, 9).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(5, 10).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(5, 11).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(4, 0).addWall(Direction.NORTH);
-board.getTile(4, 4).addWall(Direction.EAST);
-board.getTile(4, 4).addWall(Direction.SOUTH);
-board.getTile(4, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(4, 5).addWall(Direction.NORTH);
-board.getTile(4, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(4, 6).addWall(Direction.SOUTH);
-board.getTile(4, 7).addWall(Direction.EAST);
-board.getTile(4, 7).addWall(Direction.NORTH);
-board.getTile(4, 11).addWall(Direction.SOUTH);
-board.getTile(3, 0).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(3, 1).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(3, 2).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(3, 3).setGear(new Gear(RotationDirection.COUNTERCLOCKWISE));
-board.getTile(3, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(3, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(3, 8).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(3, 9).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, true, null, false));
-board.getTile(3, 10).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, true, null, false));
-board.getTile(3, 11).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, true, null, false));
-board.getTile(2, 0).addWall(Direction.NORTH);
-board.getTile(2, 3).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(2, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(2, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(2, 8).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(2, 8).addWall(Direction.SOUTH);
-board.getTile(2, 9).addWall(Direction.NORTH);
-board.getTile(2, 11).addWall(Direction.SOUTH);
-board.getTile(1, 0).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(1, 1).setFieldType(FieldType.REPAIR_1);
-board.getTile(1, 2).setFieldType(FieldType.PIT);
-board.getTile(1, 3).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(1, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(1, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(1, 8).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(1, 10).setGear(new Gear(RotationDirection.CLOCKWISE));
-board.getTile(1, 11).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(0, 2).addWall(Direction.WEST);
-board.getTile(0, 3).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(0, 4).addWall(Direction.WEST);
-board.getTile(0, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(0, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(0, 7).addWall(Direction.WEST);
-board.getTile(0, 8).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(0, 9).addWall(Direction.WEST);
-board.getTile(0, 10).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-if (only1Map) {
-    board.getTile(9, 2).setCheckpoint(new Checkpoint(1));
-    board.getTile(1, 9).setCheckpoint(new Checkpoint(2));
-    } else if (numberCheckpoint == 1) {
-        board.getTile(5, 6).setCheckpoint(new Checkpoint(numberCheckpoint));
-        } else {
-            board.getTile(5, 6).setCheckpoint(new Checkpoint(numberCheckpoint));
-        }
-        setLaserField(board, 2, 11, Direction.NORTH, 1);
+                legacyWall(board, 1, 0, LegacyOrientation.TOP);
+                legacyWall(board, 2, 0, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 3, 0, LegacyOrientation.TOP, false);
+                legacyWall(board, 4, 0, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 5, 0, LegacyOrientation.BOTTOM, true);
+                legacyWall(board, 7, 0, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 8, 0, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 9, 0, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 10, 0, LegacyOrientation.TOP, false);
+                legacyPit(board, 0, 1);
+                legacyWall(board, 1, 1, LegacyOrientation.BOTTOM);
+                legacyWall(board, 2, 1, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 3, 1, LegacyOrientation.TOP, false);
+                legacyWall(board, 3, 1, LegacyOrientation.LEFT);
+                legacyConveyor(board, 5, 1, LegacyOrientation.BOTTOM, true);
+                legacyConveyor(board, 6, 1, LegacyOrientation.TOP, false);
+                legacyConveyor(board, 8, 1, LegacyOrientation.BOTTOM, false);
+                legacyRepair(board, 10, 1, 1);
+                legacyConveyor(board, 11, 1, LegacyOrientation.RIGHT, false);
+                legacyWall(board, 0, 2, LegacyOrientation.LEFT);
+                legacyConveyor(board, 3, 2, LegacyOrientation.TOP, false);
+                legacyConveyor(board, 5, 2, LegacyOrientation.BOTTOM, true);
+                legacyConveyor(board, 6, 2, LegacyOrientation.TOP, false);
+                legacyConveyor(board, 8, 2, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 10, 2, LegacyOrientation.TOP);
+                legacyWall(board, 11, 2, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 0, 3, LegacyOrientation.LEFT, false);
+                legacyConveyor(board, 1, 3, LegacyOrientation.LEFT, false);
+                legacyConveyor(board, 2, 3, LegacyOrientation.LEFT, false);
+                legacyGear(board, 3, 3, LegacyOrientation.LEFT);
+                legacyConveyor(board, 5, 3, LegacyOrientation.BOTTOM, true);
+                legacyConveyor(board, 6, 3, LegacyOrientation.TOP, false);
+                legacyGear(board, 8, 3, LegacyOrientation.LEFT);
+                legacyConveyor(board, 9, 3, LegacyOrientation.LEFT, false);
+                legacyConveyor(board, 10, 3, LegacyOrientation.LEFT, false);
+                legacyWall(board, 10, 3, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 11, 3, LegacyOrientation.LEFT, false);
+                legacyWall(board, 0, 4, LegacyOrientation.LEFT);
+                legacyWall(board, 4, 4, LegacyOrientation.TOP);
+                legacyWall(board, 4, 4, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 5, 4, LegacyOrientation.BOTTOM, true);
+                legacyWall(board, 5, 4, LegacyOrientation.LEFT);
+                legacyConveyor(board, 6, 4, LegacyOrientation.TOP, false);
+                legacyWall(board, 6, 4, LegacyOrientation.RIGHT);
+                legacyRepair(board, 7, 4, 2);
+                legacyWall(board, 7, 4, LegacyOrientation.TOP);
+                legacyWall(board, 7, 4, LegacyOrientation.LEFT);
+                legacyWall(board, 11, 4, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 1, 5, LegacyOrientation.RIGHT, false);
+                legacyConveyor(board, 2, 5, LegacyOrientation.RIGHT, false);
+                legacyConveyor(board, 3, 5, LegacyOrientation.RIGHT, false);
+                legacyConveyor(board, 4, 5, LegacyOrientation.RIGHT, false);
+                legacyWall(board, 4, 5, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 7, 5, LegacyOrientation.RIGHT, true);
+                legacyWall(board, 7, 5, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 8, 5, LegacyOrientation.RIGHT, true);
+                legacyConveyor(board, 9, 5, LegacyOrientation.RIGHT, true);
+                legacyConveyor(board, 10, 5, LegacyOrientation.RIGHT, true);
+                legacyConveyor(board, 11, 5, LegacyOrientation.RIGHT, true);
+                legacyConveyor(board, 0, 6, LegacyOrientation.LEFT, false);
+                legacyConveyor(board, 1, 6, LegacyOrientation.LEFT, false);
+                legacyConveyor(board, 2, 6, LegacyOrientation.LEFT, false);
+                legacyConveyor(board, 3, 6, LegacyOrientation.LEFT, false);
+                legacyConveyor(board, 4, 6, LegacyOrientation.LEFT, false);
+                legacyWall(board, 4, 6, LegacyOrientation.TOP);
+                legacyConveyor(board, 7, 6, LegacyOrientation.LEFT, false);
+                legacyWall(board, 7, 6, LegacyOrientation.TOP);
+                legacyConveyor(board, 8, 6, LegacyOrientation.LEFT, false);
+                legacyConveyor(board, 9, 6, LegacyOrientation.LEFT, false);
+                legacyConveyor(board, 10, 6, LegacyOrientation.LEFT, false);
+                legacyConveyor(board, 11, 6, LegacyOrientation.LEFT, false);
+                legacyWall(board, 0, 7, LegacyOrientation.LEFT);
+                legacyWall(board, 4, 7, LegacyOrientation.BOTTOM);
+                legacyWall(board, 4, 7, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 5, 7, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 5, 7, LegacyOrientation.LEFT);
+                legacyConveyor(board, 6, 7, LegacyOrientation.TOP, false);
+                legacyWall(board, 6, 7, LegacyOrientation.RIGHT);
+                legacyWall(board, 7, 7, LegacyOrientation.BOTTOM);
+                legacyWall(board, 7, 7, LegacyOrientation.LEFT);
+                legacyWall(board, 11, 7, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 0, 8, LegacyOrientation.RIGHT, false);
+                legacyConveyor(board, 1, 8, LegacyOrientation.RIGHT, false);
+                legacyConveyor(board, 2, 8, LegacyOrientation.RIGHT, false);
+                legacyGear(board, 3, 8, LegacyOrientation.LEFT);
+                legacyConveyor(board, 5, 8, LegacyOrientation.BOTTOM, false);
+                legacyConveyor(board, 6, 8, LegacyOrientation.TOP, false);
+                legacyConveyor(board, 8, 8, LegacyOrientation.BOTTOM, false);
+                legacyConveyor(board, 9, 8, LegacyOrientation.RIGHT, true);
+                legacyConveyor(board, 10, 8, LegacyOrientation.RIGHT, true);
+                legacyConveyor(board, 11, 8, LegacyOrientation.RIGHT, true);
+                legacyWall(board, 0, 9, LegacyOrientation.LEFT);
+                legacyConveyor(board, 3, 9, LegacyOrientation.TOP, false);
+                legacyConveyor(board, 5, 9, LegacyOrientation.BOTTOM, false);
+                legacyConveyor(board, 6, 9, LegacyOrientation.TOP, false);
+                legacyConveyor(board, 8, 9, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 8, 9, LegacyOrientation.RIGHT);
+                legacyWall(board, 9, 9, LegacyOrientation.LEFT);
+                legacyWall(board, 11, 9, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 0, 10, LegacyOrientation.LEFT, false);
+                legacyRepair(board, 1, 10, 1);
+                legacyPit(board, 2, 10);
+                legacyConveyor(board, 3, 10, LegacyOrientation.TOP, false);
+                legacyConveyor(board, 5, 10, LegacyOrientation.BOTTOM, false);
+                legacyConveyor(board, 6, 10, LegacyOrientation.TOP, false);
+                legacyConveyor(board, 8, 10, LegacyOrientation.BOTTOM, false);
+                legacyGear(board, 10, 10, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 11, 10, LegacyOrientation.LEFT, false);
+                legacyWall(board, 2, 11, LegacyOrientation.TOP);
+                legacyConveyor(board, 3, 11, LegacyOrientation.TOP, false);
+                legacyWall(board, 4, 11, LegacyOrientation.TOP);
+                legacyConveyor(board, 5, 11, LegacyOrientation.BOTTOM, false);
+                legacyConveyor(board, 6, 11, LegacyOrientation.TOP, false);
+                legacyWall(board, 7, 11, LegacyOrientation.TOP);
+                legacyConveyor(board, 8, 11, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 9, 11, LegacyOrientation.TOP);
+                legacyConveyor(board, 10, 11, LegacyOrientation.TOP, false);
+                if (only1Map) {
+                        legacyCheckpoint(board, 2, 2, 1);
+                        legacyCheckpoint(board, 9, 10, 2);
+                } else if (numberCheckpoint == 1) {
+                        legacyCheckpoint(board, 6, 6, numberCheckpoint);
+                } else {
+                        legacyCheckpoint(board, 6, 6, numberCheckpoint);
+                }
+                legacyMirrorWalls(board);
+                legacyLaser(board, 11, 9, LegacyOrientation.LEFT, 1);
+                legacyMirrorWalls(board);
     }
 
     private void generateMap3(Board board, int numberCheckpoint, boolean only1Map) {
-
-board.getTile(11, 2).addWall(Direction.EAST);
-board.getTile(11, 4).addWall(Direction.EAST);
-board.getTile(11, 7).addWall(Direction.EAST);
-board.getTile(11, 9).addWall(Direction.EAST);
-board.getTile(10, 1).setFieldType(FieldType.PIT);
-board.getTile(10, 2).setFieldType(FieldType.PIT);
-board.getTile(10, 9).setFieldType(FieldType.PIT);
-board.getTile(10, 10).setFieldType(FieldType.PIT);
-board.getTile(9, 0).addWall(Direction.NORTH);
-board.getTile(9, 1).setFieldType(FieldType.PIT);
-board.getTile(9, 2).setGear(new Gear(RotationDirection.CLOCKWISE));
-board.getTile(9, 3).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(9, 4).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(9, 5).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(9, 5).addWall(Direction.WEST);
-board.getTile(9, 6).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(9, 7).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(9, 8).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(9, 9).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(9, 10).setFieldType(FieldType.PIT);
-board.getTile(9, 11).addWall(Direction.SOUTH);
-board.getTile(8, 2).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(8, 3).setGear(new Gear(RotationDirection.COUNTERCLOCKWISE));
-board.getTile(8, 4).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(8, 5).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, true));
-board.getTile(8, 6).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(8, 7).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(8, 8).setGear(new Gear(RotationDirection.COUNTERCLOCKWISE));
-board.getTile(8, 9).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(7, 0).addWall(Direction.NORTH);
-board.getTile(7, 2).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(7, 3).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(7, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(7, 6).setFieldType(FieldType.PIT);
-board.getTile(7, 7).setFieldType(FieldType.PIT);
-board.getTile(7, 8).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(7, 9).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(7, 10).setFieldType(FieldType.REPAIR_1);
-board.getTile(7, 11).addWall(Direction.SOUTH);
-board.getTile(6, 2).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(6, 2).addWall(Direction.SOUTH);
-board.getTile(6, 3).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(6, 3).addWall(Direction.NORTH);
-board.getTile(6, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(6, 7).setFieldType(FieldType.PIT);
-board.getTile(6, 8).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(6, 8).addWall(Direction.SOUTH);
-board.getTile(6, 9).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(6, 9).addWall(Direction.NORTH);
-board.getTile(5, 2).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(5, 3).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(5, 4).setFieldType(FieldType.PIT);
-board.getTile(5, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(5, 8).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(5, 9).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(4, 0).addWall(Direction.NORTH);
-board.getTile(4, 1).setFieldType(FieldType.REPAIR_1);
-board.getTile(4, 2).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(4, 3).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(4, 4).setFieldType(FieldType.PIT);
-board.getTile(4, 5).setFieldType(FieldType.PIT);
-board.getTile(4, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(4, 7).setFieldType(FieldType.REPAIR_2);
-board.getTile(4, 8).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(4, 9).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(4, 11).addWall(Direction.SOUTH);
-board.getTile(3, 2).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(3, 3).setGear(new Gear(RotationDirection.COUNTERCLOCKWISE));
-board.getTile(3, 4).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(3, 5).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(3, 6).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, true));
-board.getTile(3, 6).addWall(Direction.WEST);
-board.getTile(3, 7).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(3, 8).setGear(new Gear(RotationDirection.COUNTERCLOCKWISE));
-board.getTile(3, 9).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(2, 0).addWall(Direction.NORTH);
-board.getTile(2, 1).setFieldType(FieldType.PIT);
-board.getTile(2, 2).setGear(new Gear(RotationDirection.CLOCKWISE));
-board.getTile(2, 3).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(2, 4).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(2, 5).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(2, 6).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(2, 6).addWall(Direction.EAST);
-board.getTile(2, 7).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(2, 8).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(2, 9).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(2, 10).setFieldType(FieldType.PIT);
-board.getTile(2, 11).addWall(Direction.SOUTH);
-board.getTile(1, 1).setFieldType(FieldType.PIT);
-board.getTile(1, 2).setFieldType(FieldType.PIT);
-board.getTile(1, 9).setFieldType(FieldType.PIT);
-board.getTile(1, 10).setFieldType(FieldType.PIT);
-board.getTile(0, 2).addWall(Direction.WEST);
-board.getTile(0, 4).addWall(Direction.WEST);
-board.getTile(0, 7).addWall(Direction.WEST);
-board.getTile(0, 9).addWall(Direction.WEST);
-if (only1Map) {
-    board.getTile(10, 4).setCheckpoint(new Checkpoint(1));
-    board.getTile(1, 8).setCheckpoint(new Checkpoint(2));
-    } else if (numberCheckpoint == 1) {
-        board.getTile(10, 4).setCheckpoint(new Checkpoint(numberCheckpoint));
-        } else {
-            board.getTile(7, 4).setCheckpoint(new Checkpoint(numberCheckpoint));
-        }
+                legacyWall(board, 2, 0, LegacyOrientation.BOTTOM);
+                legacyWall(board, 4, 0, LegacyOrientation.BOTTOM);
+                legacyWall(board, 7, 0, LegacyOrientation.BOTTOM);
+                legacyWall(board, 9, 0, LegacyOrientation.BOTTOM);
+                legacyPit(board, 1, 1);
+                legacyPit(board, 2, 1);
+                legacyPit(board, 9, 1);
+                legacyPit(board, 10, 1);
+                legacyWall(board, 0, 2, LegacyOrientation.LEFT);
+                legacyPit(board, 1, 2);
+                legacyGear(board, 2, 2, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 3, 2, LegacyOrientation.LEFT, false);
+                legacyConveyor(board, 4, 2, LegacyOrientation.LEFT, false);
+                legacyConveyor(board, 5, 2, LegacyOrientation.LEFT, false);
+                legacyWall(board, 5, 2, LegacyOrientation.TOP);
+                legacyConveyor(board, 6, 2, LegacyOrientation.LEFT, false);
+                legacyConveyor(board, 7, 2, LegacyOrientation.LEFT, false);
+                legacyConveyor(board, 8, 2, LegacyOrientation.LEFT, false);
+                legacyConveyor(board, 9, 2, LegacyOrientation.BOTTOM, false);
+                legacyPit(board, 10, 2);
+                legacyWall(board, 11, 2, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 2, 3, LegacyOrientation.TOP, false);
+                legacyGear(board, 3, 3, LegacyOrientation.LEFT);
+                legacyConveyor(board, 4, 3, LegacyOrientation.RIGHT, false);
+                legacyCrossing(board, 5, 3, LegacyOrientation.RIGHT, 1, false);
+                legacyConveyor(board, 6, 3, LegacyOrientation.RIGHT, false);
+                legacyConveyor(board, 7, 3, LegacyOrientation.RIGHT, false);
+                legacyGear(board, 8, 3, LegacyOrientation.LEFT);
+                legacyConveyor(board, 9, 3, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 0, 4, LegacyOrientation.LEFT);
+                legacyConveyor(board, 2, 4, LegacyOrientation.TOP, false);
+                legacyConveyor(board, 3, 4, LegacyOrientation.BOTTOM, false);
+                legacyConveyor(board, 5, 4, LegacyOrientation.BOTTOM, false);
+                legacyPit(board, 6, 4);
+                legacyPit(board, 7, 4);
+                legacyConveyor(board, 8, 4, LegacyOrientation.TOP, false);
+                legacyConveyor(board, 9, 4, LegacyOrientation.BOTTOM, false);
+                legacyRepair(board, 10, 4, 1);
+                legacyWall(board, 11, 4, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 2, 5, LegacyOrientation.TOP, false);
+                legacyWall(board, 2, 5, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 3, 5, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 3, 5, LegacyOrientation.LEFT);
+                legacyConveyor(board, 5, 5, LegacyOrientation.BOTTOM, false);
+                legacyPit(board, 7, 5);
+                legacyConveyor(board, 8, 5, LegacyOrientation.TOP, false);
+                legacyWall(board, 8, 5, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 9, 5, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 9, 5, LegacyOrientation.LEFT);
+                legacyConveyor(board, 2, 6, LegacyOrientation.TOP, false);
+                legacyConveyor(board, 3, 6, LegacyOrientation.BOTTOM, false);
+                legacyPit(board, 4, 6);
+                legacyConveyor(board, 6, 6, LegacyOrientation.TOP, false);
+                legacyConveyor(board, 8, 6, LegacyOrientation.TOP, false);
+                legacyConveyor(board, 9, 6, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 0, 7, LegacyOrientation.LEFT);
+                legacyRepair(board, 1, 7, 1);
+                legacyConveyor(board, 2, 7, LegacyOrientation.TOP, false);
+                legacyConveyor(board, 3, 7, LegacyOrientation.BOTTOM, false);
+                legacyPit(board, 4, 7);
+                legacyPit(board, 5, 7);
+                legacyConveyor(board, 6, 7, LegacyOrientation.TOP, false);
+                legacyRepair(board, 7, 7, 2);
+                legacyConveyor(board, 8, 7, LegacyOrientation.TOP, false);
+                legacyConveyor(board, 9, 7, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 11, 7, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 2, 8, LegacyOrientation.TOP, false);
+                legacyGear(board, 3, 8, LegacyOrientation.LEFT);
+                legacyConveyor(board, 4, 8, LegacyOrientation.LEFT, false);
+                legacyConveyor(board, 5, 8, LegacyOrientation.LEFT, false);
+                legacyCrossing(board, 6, 8, LegacyOrientation.LEFT, 1, false);
+                legacyWall(board, 6, 8, LegacyOrientation.TOP);
+                legacyConveyor(board, 7, 8, LegacyOrientation.LEFT, false);
+                legacyGear(board, 8, 8, LegacyOrientation.LEFT);
+                legacyConveyor(board, 9, 8, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 0, 9, LegacyOrientation.LEFT);
+                legacyPit(board, 1, 9);
+                legacyGear(board, 2, 9, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 3, 9, LegacyOrientation.RIGHT, false);
+                legacyConveyor(board, 4, 9, LegacyOrientation.RIGHT, false);
+                legacyConveyor(board, 5, 9, LegacyOrientation.RIGHT, false);
+                legacyConveyor(board, 6, 9, LegacyOrientation.RIGHT, false);
+                legacyWall(board, 6, 9, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 7, 9, LegacyOrientation.RIGHT, false);
+                legacyConveyor(board, 8, 9, LegacyOrientation.RIGHT, false);
+                legacyConveyor(board, 9, 9, LegacyOrientation.RIGHT, false);
+                legacyPit(board, 10, 9);
+                legacyWall(board, 11, 9, LegacyOrientation.RIGHT);
+                legacyPit(board, 1, 10);
+                legacyPit(board, 2, 10);
+                legacyPit(board, 9, 10);
+                legacyPit(board, 10, 10);
+                legacyWall(board, 2, 11, LegacyOrientation.TOP);
+                legacyWall(board, 4, 11, LegacyOrientation.TOP);
+                legacyWall(board, 7, 11, LegacyOrientation.TOP);
+                legacyWall(board, 9, 11, LegacyOrientation.TOP);
+                if (only1Map) {
+                        legacyCheckpoint(board, 4, 1, 1);
+                        legacyCheckpoint(board, 8, 10, 2);
+                } else if (numberCheckpoint == 1) {
+                        legacyCheckpoint(board, 4, 1, numberCheckpoint);
+                } else {
+                        legacyCheckpoint(board, 4, 4, numberCheckpoint);
+                }
+                legacyMirrorWalls(board);
     }
 
     private void generateMap4(Board board, int numberCheckpoint, boolean only1Map) {
-
-for (int i = 2; i < 10; i++) {
-    board.getTile(11 - (i), 1).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-}
-board.getTile(6, 1).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, true));
-for (int i = 2; i < 9; i++) {
-    board.getTile(11 - (i), 2).setConveyorBelt(new ConveyorBelt(Direction.WEST, true, null, false));
-}
-board.getTile(6, 2).addWall(Direction.SOUTH);
-for (int i = 3; i < 8; i++) {
-    board.getTile(11 - (i), 3).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-}
-board.getTile(6, 3).addWall(Direction.NORTH);
-board.getTile(5, 3).addWall(Direction.SOUTH);
-for (int i = 4; i < 7; i++) {
-    board.getTile(11 - (i), 4).setConveyorBelt(new ConveyorBelt(Direction.WEST, true, null, false));
-}
-board.getTile(5, 4).addWall(Direction.NORTH);
-for (int i = 2; i < 10; i++) {
-    board.getTile(11 - (i), 10).setConveyorBelt(new ConveyorBelt(Direction.EAST, true, null, false));
-}
-board.getTile(5, 10).setConveyorBelt(new ConveyorBelt(Direction.EAST, true, null, true));
-for (int i = 3; i < 10; i++) {
-    board.getTile(11 - (i), 9).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-}
-board.getTile(5, 9).addWall(Direction.NORTH);
-for (int i = 4; i < 9; i++) {
-    board.getTile(11 - (i), 8).setConveyorBelt(new ConveyorBelt(Direction.EAST, true, null, false));
-}
-board.getTile(5, 8).addWall(Direction.SOUTH);
-for (int i = 5; i < 8; i++) {
-    board.getTile(11 - (i), 7).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-}
-board.getTile(6, 7).addWall(Direction.SOUTH);
-board.getTile(6, 8).addWall(Direction.NORTH);
-for (int j = 3; j < 10; j++) {
-    board.getTile(10, j).setConveyorBelt(new ConveyorBelt(Direction.NORTH, true, null, false));
-}
-board.getTile(10, 6).setConveyorBelt(new ConveyorBelt(Direction.NORTH, true, null, true));
-for (int j = 4; j < 9; j++) {
-    board.getTile(9, j).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-}
-board.getTile(9, 6).addWall(Direction.WEST);
-board.getTile(8, 6).addWall(Direction.EAST);
-for (int j = 5; j < 8; j++) {
-    board.getTile(8, j).setConveyorBelt(new ConveyorBelt(Direction.NORTH, true, null, false));
-}
-for (int j = 2; j < 9; j++) {
-    board.getTile(1, j).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-}
-board.getTile(1, 5).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, true));
-for (int j = 3; j < 8; j++) {
-    board.getTile(2, j).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, true, null, false));
-}
-for (int j = 4; j < 7; j++) {
-    board.getTile(3, j).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-}
-board.getTile(11, 2).setPusher(new Pusher(Direction.EAST, Set.of(4)));
-board.getTile(11, 4).setPusher(new Pusher(Direction.EAST, Set.of(0)));
-board.getTile(11, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(11, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, true, null, false));
-board.getTile(11, 7).setPusher(new Pusher(Direction.EAST, Set.of(0)));
-board.getTile(11, 9).setPusher(new Pusher(Direction.EAST, Set.of(4)));
-board.getTile(11, 10).setConveyorBelt(new ConveyorBelt(Direction.WEST, true, null, false));
-board.getTile(10, 0).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(10, 1).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(10, 2).setConveyorBelt(new ConveyorBelt(Direction.NORTH, true, null, false));
-board.getTile(10, 10).setConveyorBelt(new ConveyorBelt(Direction.NORTH, true, null, true));
-board.getTile(9, 0).setPusher(new Pusher(Direction.NORTH, Set.of(4)));
-board.getTile(9, 3).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(9, 9).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(9, 11).setPusher(new Pusher(Direction.SOUTH, Set.of(4)));
-board.getTile(8, 4).setConveyorBelt(new ConveyorBelt(Direction.NORTH, true, null, false));
-board.getTile(8, 8).setConveyorBelt(new ConveyorBelt(Direction.EAST, true, null, false));
-board.getTile(7, 0).setPusher(new Pusher(Direction.NORTH, Set.of(0)));
-board.getTile(7, 5).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(7, 6).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(7, 7).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(7, 11).setPusher(new Pusher(Direction.SOUTH, Set.of(0)));
-board.getTile(6, 0).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(6, 5).setFieldType(FieldType.PIT);
-board.getTile(6, 6).setFieldType(FieldType.PIT);
-board.getTile(5, 0).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(5, 5).setFieldType(FieldType.PIT);
-board.getTile(5, 6).setFieldType(FieldType.PIT);
-board.getTile(5, 11).setConveyorBelt(new ConveyorBelt(Direction.NORTH, true, null, false));
-board.getTile(4, 0).setPusher(new Pusher(Direction.NORTH, Set.of(0)));
-board.getTile(4, 4).setConveyorBelt(new ConveyorBelt(Direction.WEST, true, null, false));
-board.getTile(4, 5).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, true, null, false));
-board.getTile(4, 6).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, true, null, false));
-board.getTile(4, 11).setPusher(new Pusher(Direction.SOUTH, Set.of(0)));
-board.getTile(3, 3).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(3, 7).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(2, 0).setPusher(new Pusher(Direction.NORTH, Set.of(4)));
-board.getTile(2, 2).setConveyorBelt(new ConveyorBelt(Direction.WEST, true, null, false));
-board.getTile(2, 8).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, true, null, false));
-board.getTile(2, 11).setPusher(new Pusher(Direction.SOUTH, Set.of(4)));
-board.getTile(1, 1).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, true));
-board.getTile(1, 9).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(1, 10).setConveyorBelt(new ConveyorBelt(Direction.NORTH, true, null, false));
-board.getTile(1, 11).setConveyorBelt(new ConveyorBelt(Direction.NORTH, true, null, false));
-board.getTile(0, 1).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(0, 2).setPusher(new Pusher(Direction.WEST, Set.of(4)));
-board.getTile(0, 4).setPusher(new Pusher(Direction.WEST, Set.of(0)));
-board.getTile(0, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(0, 7).setPusher(new Pusher(Direction.WEST, Set.of(0)));
-board.getTile(0, 9).setPusher(new Pusher(Direction.WEST, Set.of(4)));
-if (only1Map) {
-    board.getTile(10, 1).setCheckpoint(new Checkpoint(1));
-    board.getTile(3, 8).setCheckpoint(new Checkpoint(2));
-    } else if (numberCheckpoint == 1) {
-        board.getTile(10, 1).setCheckpoint(new Checkpoint(numberCheckpoint));
-        } else {
-            board.getTile(3, 8).setCheckpoint(new Checkpoint(numberCheckpoint));
-        }
-        setLaserField(board, 6, 7, Direction.NORTH, 1);
-        setLaserField(board, 5, 8, Direction.NORTH, 1);
+                for (int i = 2; i < 10; i++) {
+                        legacyConveyor(board, 1, i, LegacyOrientation.TOP, false);
+                }
+                legacyCrossing(board, 1, 5, LegacyOrientation.TOP, 1, false);
+                for (int i = 2; i < 9; i++) {
+                        legacyConveyor(board, 2, i, LegacyOrientation.TOP, true);
+                }
+                legacyWall(board, 2, 5, LegacyOrientation.RIGHT);
+                for (int i = 3; i < 8; i++) {
+                        legacyConveyor(board, 3, i, LegacyOrientation.TOP, false);
+                }
+                legacyWall(board, 3, 5, LegacyOrientation.LEFT);
+                legacyWall(board, 3, 6, LegacyOrientation.RIGHT);
+                for (int i = 4; i < 7; i++) {
+                        legacyConveyor(board, 4, i, LegacyOrientation.TOP, true);
+                }
+                legacyWall(board, 4, 6, LegacyOrientation.LEFT);
+                for (int i = 2; i < 10; i++) {
+                        legacyConveyor(board, 10, i, LegacyOrientation.BOTTOM, true);
+                }
+                legacyCrossing(board, 10, 6, LegacyOrientation.BOTTOM, 1, true);
+                for (int i = 3; i < 10; i++) {
+                        legacyConveyor(board, 9, i, LegacyOrientation.BOTTOM, false);
+                }
+                legacyWall(board, 9, 6, LegacyOrientation.LEFT);
+                for (int i = 4; i < 9; i++) {
+                        legacyConveyor(board, 8, i, LegacyOrientation.BOTTOM, true);
+                }
+                legacyWall(board, 8, 6, LegacyOrientation.RIGHT);
+                for (int i = 5; i < 8; i++) {
+                        legacyConveyor(board, 7, i, LegacyOrientation.BOTTOM, false);
+                }
+                legacyWall(board, 7, 5, LegacyOrientation.RIGHT);
+                legacyWall(board, 8, 5, LegacyOrientation.LEFT);
+                for (int j = 3; j < 10; j++) {
+                        legacyConveyor(board, j, 1, LegacyOrientation.LEFT, true);
+                }
+                legacyCrossing(board, 6, 1, LegacyOrientation.LEFT, 1, true);
+                for (int j = 4; j < 9; j++) {
+                        legacyConveyor(board, j, 2, LegacyOrientation.LEFT, false);
+                }
+                legacyWall(board, 6, 2, LegacyOrientation.TOP);
+                legacyWall(board, 6, 3, LegacyOrientation.BOTTOM);
+                for (int j = 5; j < 8; j++) {
+                        legacyConveyor(board, j, 3, LegacyOrientation.LEFT, true);
+                }
+                for (int j = 2; j < 9; j++) {
+                        legacyConveyor(board, j, 10, LegacyOrientation.RIGHT, false);
+                }
+                legacyCrossing(board, 5, 10, LegacyOrientation.RIGHT, 1, false);
+                for (int j = 3; j < 8; j++) {
+                        legacyConveyor(board, j, 9, LegacyOrientation.RIGHT, true);
+                }
+                for (int j = 4; j < 7; j++) {
+                        legacyConveyor(board, j, 8, LegacyOrientation.RIGHT, false);
+                }
+                legacyPusher(board, 2, 0, LegacyOrientation.BOTTOM, 4);
+                legacyPusher(board, 4, 0, LegacyOrientation.BOTTOM, 0);
+                legacyConveyor(board, 5, 0, LegacyOrientation.BOTTOM, false);
+                legacyConveyor(board, 6, 0, LegacyOrientation.TOP, true);
+                legacyPusher(board, 7, 0, LegacyOrientation.BOTTOM, 0);
+                legacyPusher(board, 9, 0, LegacyOrientation.BOTTOM, 4);
+                legacyConveyor(board, 10, 0, LegacyOrientation.TOP, true);
+                legacyConveyor(board, 0, 1, LegacyOrientation.RIGHT, false);
+                legacyCurve(board, 1, 1, LegacyOrientation.RIGHT, 1, false);
+                legacyCurve(board, 2, 1, LegacyOrientation.LEFT, 2, true);
+                legacyCrossing(board, 10, 1, LegacyOrientation.LEFT, 3, true);
+                legacyPusher(board, 0, 2, LegacyOrientation.LEFT, 4);
+                legacyCurve(board, 3, 2, LegacyOrientation.LEFT, 2, false);
+                legacyCurve(board, 9, 2, LegacyOrientation.BOTTOM, 2, false);
+                legacyPusher(board, 11, 2, LegacyOrientation.RIGHT, 4);
+                legacyCurve(board, 4, 3, LegacyOrientation.LEFT, 2, true);
+                legacyCurve(board, 8, 3, LegacyOrientation.BOTTOM, 2, true);
+                legacyPusher(board, 0, 4, LegacyOrientation.LEFT, 0);
+                legacyCurve(board, 5, 4, LegacyOrientation.LEFT, 2, false);
+                legacyConveyor(board, 6, 4, LegacyOrientation.LEFT, false);
+                legacyCurve(board, 7, 4, LegacyOrientation.BOTTOM, 2, false);
+                legacyPusher(board, 11, 4, LegacyOrientation.RIGHT, 0);
+                legacyConveyor(board, 0, 5, LegacyOrientation.RIGHT, false);
+                legacyPit(board, 5, 5);
+                legacyPit(board, 6, 5);
+                legacyConveyor(board, 0, 6, LegacyOrientation.LEFT, false);
+                legacyPit(board, 5, 6);
+                legacyPit(board, 6, 6);
+                legacyConveyor(board, 11, 6, LegacyOrientation.LEFT, true);
+                legacyPusher(board, 0, 7, LegacyOrientation.LEFT, 0);
+                legacyCurve(board, 4, 7, LegacyOrientation.TOP, 2, true);
+                legacyConveyor(board, 5, 7, LegacyOrientation.RIGHT, true);
+                legacyCurve(board, 6, 7, LegacyOrientation.RIGHT, 2, true);
+                legacyPusher(board, 11, 7, LegacyOrientation.RIGHT, 0);
+                legacyCurve(board, 3, 8, LegacyOrientation.TOP, 2, false);
+                legacyCurve(board, 7, 8, LegacyOrientation.RIGHT, 2, false);
+                legacyPusher(board, 0, 9, LegacyOrientation.LEFT, 4);
+                legacyCurve(board, 2, 9, LegacyOrientation.TOP, 2, true);
+                legacyCurve(board, 8, 9, LegacyOrientation.RIGHT, 2, true);
+                legacyPusher(board, 11, 9, LegacyOrientation.RIGHT, 4);
+                legacyCrossing(board, 1, 10, LegacyOrientation.RIGHT, 3, false);
+                legacyCurve(board, 9, 10, LegacyOrientation.RIGHT, 2, false);
+                legacyCurve(board, 10, 10, LegacyOrientation.LEFT, 1, true);
+                legacyConveyor(board, 11, 10, LegacyOrientation.LEFT, true);
+                legacyConveyor(board, 1, 11, LegacyOrientation.BOTTOM, false);
+                legacyPusher(board, 2, 11, LegacyOrientation.TOP, 4);
+                legacyPusher(board, 4, 11, LegacyOrientation.TOP, 0);
+                legacyConveyor(board, 5, 11, LegacyOrientation.BOTTOM, false);
+                legacyPusher(board, 7, 11, LegacyOrientation.TOP, 0);
+                legacyPusher(board, 9, 11, LegacyOrientation.TOP, 4);
+                if (only1Map) {
+                        legacyCheckpoint(board, 1, 1, 1);
+                        legacyCheckpoint(board, 8, 8, 2);
+                } else if (numberCheckpoint == 1) {
+                        legacyCheckpoint(board, 1, 1, numberCheckpoint);
+                } else {
+                        legacyCheckpoint(board, 8, 8, numberCheckpoint);
+                }
+                legacyMirrorWalls(board);
+                legacyLaser(board, 7, 5, LegacyOrientation.LEFT, 1);
+                legacyLaser(board, 8, 6, LegacyOrientation.LEFT, 1);
+                legacyMirrorWalls(board);
     }
 
     private void generateMap5(Board board, int numberCheckpoint, boolean only1Map) {
-
-board.getTile(11, 0).setConveyorBelt(new ConveyorBelt(Direction.WEST, true, null, false));
-board.getTile(11, 2).addWall(Direction.EAST);
-board.getTile(11, 2).addWall(Direction.WEST);
-board.getTile(11, 4).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(11, 4).addWall(Direction.EAST);
-board.getTile(11, 5).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(11, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, true));
-board.getTile(11, 7).setConveyorBelt(new ConveyorBelt(Direction.NORTH, true, null, false));
-board.getTile(11, 7).addWall(Direction.EAST);
-board.getTile(11, 8).setConveyorBelt(new ConveyorBelt(Direction.NORTH, true, null, false));
-board.getTile(11, 8).addWall(Direction.WEST);
-board.getTile(11, 9).setConveyorBelt(new ConveyorBelt(Direction.NORTH, true, null, false));
-board.getTile(11, 9).addWall(Direction.EAST);
-board.getTile(11, 10).setConveyorBelt(new ConveyorBelt(Direction.NORTH, true, null, true));
-board.getTile(11, 10).addWall(Direction.WEST);
-board.getTile(11, 11).setConveyorBelt(new ConveyorBelt(Direction.NORTH, true, null, false));
-board.getTile(10, 0).setConveyorBelt(new ConveyorBelt(Direction.WEST, true, null, true));
-board.getTile(10, 1).setFieldType(FieldType.REPAIR_1);
-board.getTile(10, 2).addWall(Direction.EAST);
-board.getTile(10, 3).addWall(Direction.SOUTH);
-board.getTile(10, 4).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(10, 4).addWall(Direction.NORTH);
-board.getTile(10, 4).addWall(Direction.SOUTH);
-board.getTile(10, 5).setPusher(new Pusher(Direction.NORTH, Set.of(3)));
-board.getTile(10, 5).addWall(Direction.NORTH);
-board.getTile(10, 6).setPress(new Press(Set.of(1)));
-board.getTile(10, 8).addWall(Direction.EAST);
-board.getTile(10, 9).setFieldType(FieldType.REPAIR_2);
-board.getTile(10, 9).addWall(Direction.WEST);
-board.getTile(10, 9).addWall(Direction.SOUTH);
-board.getTile(10, 10).addWall(Direction.NORTH);
-board.getTile(10, 10).addWall(Direction.EAST);
-board.getTile(10, 11).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(9, 0).setConveyorBelt(new ConveyorBelt(Direction.WEST, true, null, false));
-board.getTile(9, 0).addWall(Direction.NORTH);
-board.getTile(9, 1).addWall(Direction.WEST);
-board.getTile(9, 1).addWall(Direction.SOUTH);
-board.getTile(9, 2).addWall(Direction.NORTH);
-board.getTile(9, 3).addWall(Direction.EAST);
-board.getTile(9, 4).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(9, 5).addWall(Direction.WEST);
-board.getTile(9, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(9, 7).addWall(Direction.WEST);
-board.getTile(9, 7).addWall(Direction.SOUTH);
-board.getTile(9, 8).setPusher(new Pusher(Direction.NORTH, Set.of(2)));
-board.getTile(9, 9).addWall(Direction.WEST);
-board.getTile(9, 9).addWall(Direction.EAST);
-board.getTile(9, 10).setPusher(new Pusher(Direction.SOUTH, Set.of(1)));
-board.getTile(9, 10).addWall(Direction.SOUTH);
-board.getTile(9, 11).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(9, 11).addWall(Direction.SOUTH);
-board.getTile(8, 0).setConveyorBelt(new ConveyorBelt(Direction.WEST, true, null, false));
-board.getTile(8, 1).addWall(Direction.EAST);
-board.getTile(8, 2).addWall(Direction.SOUTH);
-board.getTile(8, 2).addWall(Direction.WEST);
-board.getTile(8, 3).addWall(Direction.NORTH);
-board.getTile(8, 3).addWall(Direction.SOUTH);
-board.getTile(8, 4).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(8, 4).addWall(Direction.NORTH);
-board.getTile(8, 5).setFieldType(FieldType.REPAIR_2);
-board.getTile(8, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(8, 7).addWall(Direction.EAST);
-board.getTile(8, 9).setFieldType(FieldType.PIT);
-board.getTile(8, 9).addWall(Direction.EAST);
-board.getTile(8, 10).addWall(Direction.WEST);
-board.getTile(8, 11).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, true));
-board.getTile(7, 0).setConveyorBelt(new ConveyorBelt(Direction.WEST, true, null, false));
-board.getTile(7, 0).addWall(Direction.SOUTH);
-board.getTile(7, 1).addWall(Direction.NORTH);
-board.getTile(7, 1).addWall(Direction.WEST);
-board.getTile(7, 2).addWall(Direction.EAST);
-board.getTile(7, 3).addWall(Direction.WEST);
-board.getTile(7, 4).setPress(new Press(Set.of(2)));
-board.getTile(7, 5).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(7, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(7, 9).setConveyorBelt(new ConveyorBelt(Direction.EAST, true, null, false));
-board.getTile(7, 10).addWall(Direction.EAST);
-board.getTile(7, 11).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(6, 0).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, true, null, true));
-board.getTile(6, 1).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, true, null, false));
-board.getTile(6, 1).addWall(Direction.EAST);
-board.getTile(6, 2).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, true, null, false));
-board.getTile(6, 2).addWall(Direction.WEST);
-board.getTile(6, 3).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, true, null, false));
-board.getTile(6, 3).addWall(Direction.EAST);
-board.getTile(6, 4).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, true));
-board.getTile(6, 5).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(6, 6).setPress(new Press(Set.of(3)));
-board.getTile(6, 8).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, true, null, false));
-board.getTile(6, 9).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, true, null, false));
-board.getTile(6, 11).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(5, 1).addWall(Direction.WEST);
-board.getTile(5, 2).addWall(Direction.EAST);
-board.getTile(5, 5).setFieldType(FieldType.REPAIR_2);
-board.getTile(5, 3).addWall(Direction.WEST);
-board.getTile(5, 4).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(5, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, true));
-board.getTile(5, 7).setConveyorBelt(new ConveyorBelt(Direction.NORTH, true, null, false));
-board.getTile(5, 8).setPusher(new Pusher(Direction.WEST, Set.of(2)));
-board.getTile(5, 9).setConveyorBelt(new ConveyorBelt(Direction.NORTH, true, null, false));
-board.getTile(5, 10).setConveyorBelt(new ConveyorBelt(Direction.NORTH, true, null, false));
-board.getTile(5, 11).setConveyorBelt(new ConveyorBelt(Direction.NORTH, true, null, true));
-board.getTile(4, 2).addWall(Direction.WEST);
-board.getTile(4, 3).addWall(Direction.EAST);
-board.getTile(4, 4).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(4, 5).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(4, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(4, 8).addWall(Direction.WEST);
-board.getTile(4, 8).addWall(Direction.EAST);
-board.getTile(4, 9).addWall(Direction.EAST);
-board.getTile(4, 10).addWall(Direction.WEST);
-board.getTile(4, 10).addWall(Direction.SOUTH);
-board.getTile(4, 11).setConveyorBelt(new ConveyorBelt(Direction.EAST, true, null, false));
-board.getTile(4, 11).addWall(Direction.SOUTH);
-board.getTile(3, 0).addWall(Direction.SOUTH);
-board.getTile(3, 1).addWall(Direction.NORTH);
-board.getTile(3, 2).addWall(Direction.EAST);
-board.getTile(3, 3).addWall(Direction.SOUTH);
-board.getTile(3, 4).setPress(new Press(Set.of(2)));
-board.getTile(3, 4).addWall(Direction.NORTH);
-board.getTile(3, 5).addWall(Direction.EAST);
-board.getTile(3, 5).addWall(Direction.WEST);
-board.getTile(3, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(3, 8).addWall(Direction.EAST);
-board.getTile(3, 9).addWall(Direction.WEST);
-board.getTile(3, 10).addWall(Direction.EAST);
-board.getTile(3, 11).setConveyorBelt(new ConveyorBelt(Direction.EAST, true, null, false));
-board.getTile(2, 0).addWall(Direction.NORTH);
-board.getTile(2, 1).addWall(Direction.WEST);
-board.getTile(2, 1).addWall(Direction.SOUTH);
-board.getTile(2, 2).addWall(Direction.NORTH);
-board.getTile(2, 2).addWall(Direction.SOUTH);
-board.getTile(2, 3).addWall(Direction.NORTH);
-board.getTile(2, 4).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(2, 5).setFieldType(FieldType.PIT);
-board.getTile(2, 5).addWall(Direction.EAST);
-board.getTile(2, 6).setPress(new Press(Set.of(1)));
-board.getTile(2, 7).addWall(Direction.SOUTH);
-board.getTile(2, 8).addWall(Direction.NORTH);
-board.getTile(2, 8).addWall(Direction.SOUTH);
-board.getTile(2, 9).addWall(Direction.NORTH);
-board.getTile(2, 9).addWall(Direction.EAST);
-board.getTile(2, 11).setConveyorBelt(new ConveyorBelt(Direction.EAST, true, null, false));
-board.getTile(2, 11).addWall(Direction.SOUTH);
-board.getTile(1, 1).addWall(Direction.EAST);
-board.getTile(1, 2).addWall(Direction.WEST);
-board.getTile(1, 4).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(1, 5).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(1, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(1, 9).addWall(Direction.WEST);
-board.getTile(1, 9).addWall(Direction.SOUTH);
-board.getTile(1, 10).setFieldType(FieldType.REPAIR_1);
-board.getTile(1, 11).setConveyorBelt(new ConveyorBelt(Direction.EAST, true, null, true));
-board.getTile(0, 0).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, true, null, false));
-board.getTile(0, 1).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, true, null, true));
-board.getTile(0, 2).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, true, null, false));
-board.getTile(0, 2).addWall(Direction.WEST);
-board.getTile(0, 2).addWall(Direction.EAST);
-board.getTile(0, 3).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, true, null, false));
-board.getTile(0, 4).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, true));
-board.getTile(0, 4).addWall(Direction.WEST);
-board.getTile(0, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(0, 6).setFieldType(FieldType.PIT);
-board.getTile(0, 7).addWall(Direction.WEST);
-board.getTile(0, 9).addWall(Direction.WEST);
-board.getTile(0, 9).addWall(Direction.EAST);
-board.getTile(0, 10).addWall(Direction.SOUTH);
-board.getTile(0, 11).setConveyorBelt(new ConveyorBelt(Direction.EAST, true, null, false));
-if (only1Map) {
-    board.getTile(10, 2).setCheckpoint(new Checkpoint(1));
-    board.getTile(1, 9).setCheckpoint(new Checkpoint(2));
-    } else if (numberCheckpoint == 1) {
-        board.getTile(10, 2).setCheckpoint(new Checkpoint(numberCheckpoint));
-        } else {
-            board.getTile(5, 5).setCheckpoint(new Checkpoint(numberCheckpoint));
-        }
-        setLaserField(board, 9, 9, Direction.WEST, 2);
-        setLaserField(board, 8, 3, Direction.SOUTH, 1);
-        setLaserField(board, 5, 1, Direction.EAST, 1);
-        setLaserField(board, 4, 2, Direction.EAST, 1);
-        setLaserField(board, 3, 5, Direction.WEST, 1);
-        setLaserField(board, 3, 9, Direction.EAST, 1);
-        setLaserField(board, 2, 2, Direction.NORTH, 2);
-        setLaserField(board, 2, 8, Direction.SOUTH, 2);
-        setLaserField(board, 0, 9, Direction.WEST, 3);
+                legacyConveyor(board, 0, 0, LegacyOrientation.TOP, true);
+                legacyWall(board, 2, 0, LegacyOrientation.BOTTOM);
+                legacyWall(board, 2, 0, LegacyOrientation.TOP);
+                legacyCurve(board, 4, 0, LegacyOrientation.BOTTOM, 1, false);
+                legacyWall(board, 4, 0, LegacyOrientation.BOTTOM);
+                legacyCurve(board, 5, 0, LegacyOrientation.RIGHT, 2, false);
+                legacyCrossing(board, 6, 0, LegacyOrientation.TOP, 2, false);
+                legacyConveyor(board, 7, 0, LegacyOrientation.LEFT, true);
+                legacyWall(board, 7, 0, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 8, 0, LegacyOrientation.LEFT, true);
+                legacyWall(board, 8, 0, LegacyOrientation.TOP);
+                legacyConveyor(board, 9, 0, LegacyOrientation.LEFT, true);
+                legacyWall(board, 9, 0, LegacyOrientation.BOTTOM);
+                legacyCrossing(board, 10, 0, LegacyOrientation.LEFT, 1, true);
+                legacyWall(board, 10, 0, LegacyOrientation.TOP);
+                legacyConveyor(board, 11, 0, LegacyOrientation.LEFT, true);
+                legacyCrossing(board, 0, 1, LegacyOrientation.TOP, 1, true);
+                legacyRepair(board, 1, 1, 1);
+                legacyWall(board, 2, 1, LegacyOrientation.BOTTOM);
+                legacyWall(board, 3, 1, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 4, 1, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 4, 1, LegacyOrientation.LEFT);
+                legacyWall(board, 4, 1, LegacyOrientation.RIGHT);
+                legacyPusher(board, 5, 1, LegacyOrientation.LEFT, 3);
+                legacyWall(board, 5, 1, LegacyOrientation.LEFT);
+                legacyPress(board, 6, 1, 1);
+                legacyWall(board, 8, 1, LegacyOrientation.BOTTOM);
+                legacyRepair(board, 9, 1, 2);
+                legacyWall(board, 9, 1, LegacyOrientation.TOP);
+                legacyWall(board, 9, 1, LegacyOrientation.RIGHT);
+                legacyWall(board, 10, 1, LegacyOrientation.LEFT);
+                legacyWall(board, 10, 1, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 11, 1, LegacyOrientation.TOP, false);
+                legacyConveyor(board, 0, 2, LegacyOrientation.TOP, true);
+                legacyWall(board, 0, 2, LegacyOrientation.LEFT);
+                legacyWall(board, 1, 2, LegacyOrientation.TOP);
+                legacyWall(board, 1, 2, LegacyOrientation.RIGHT);
+                legacyWall(board, 2, 2, LegacyOrientation.LEFT);
+                legacyWall(board, 3, 2, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 4, 2, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 5, 2, LegacyOrientation.TOP);
+                legacyConveyor(board, 6, 2, LegacyOrientation.TOP, false);
+                legacyWall(board, 7, 2, LegacyOrientation.TOP);
+                legacyWall(board, 7, 2, LegacyOrientation.RIGHT);
+                legacyPusher(board, 8, 2, LegacyOrientation.LEFT, 2);
+                legacyWall(board, 9, 2, LegacyOrientation.TOP);
+                legacyWall(board, 9, 2, LegacyOrientation.BOTTOM);
+                legacyPusher(board, 10, 2, LegacyOrientation.RIGHT, 1);
+                legacyWall(board, 10, 2, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 11, 2, LegacyOrientation.TOP, false);
+                legacyWall(board, 11, 2, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 0, 3, LegacyOrientation.TOP, true);
+                legacyWall(board, 1, 3, LegacyOrientation.BOTTOM);
+                legacyWall(board, 2, 3, LegacyOrientation.RIGHT);
+                legacyWall(board, 2, 3, LegacyOrientation.TOP);
+                legacyWall(board, 3, 3, LegacyOrientation.LEFT);
+                legacyWall(board, 3, 3, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 4, 3, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 4, 3, LegacyOrientation.LEFT);
+                legacyRepair(board, 5, 3, 2);
+                legacyConveyor(board, 6, 3, LegacyOrientation.TOP, false);
+                legacyWall(board, 7, 3, LegacyOrientation.BOTTOM);
+                legacyPit(board, 9, 3);
+                legacyWall(board, 9, 3, LegacyOrientation.BOTTOM);
+                legacyWall(board, 10, 3, LegacyOrientation.TOP);
+                legacyCrossing(board, 11, 3, LegacyOrientation.TOP, 2, false);
+                legacyConveyor(board, 0, 4, LegacyOrientation.TOP, true);
+                legacyWall(board, 0, 4, LegacyOrientation.RIGHT);
+                legacyWall(board, 1, 4, LegacyOrientation.LEFT);
+                legacyWall(board, 1, 4, LegacyOrientation.TOP);
+                legacyWall(board, 2, 4, LegacyOrientation.BOTTOM);
+                legacyWall(board, 3, 4, LegacyOrientation.TOP);
+                legacyPress(board, 4, 4, 2);
+                legacyConveyor(board, 5, 4, LegacyOrientation.LEFT, false);
+                legacyConveyor(board, 6, 4, LegacyOrientation.TOP, false);
+                legacyConveyor(board, 9, 4, LegacyOrientation.BOTTOM, true);
+                legacyWall(board, 10, 4, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 11, 4, LegacyOrientation.TOP, false);
+                legacyCrossing(board, 0, 5, LegacyOrientation.RIGHT, 2, true);
+                legacyConveyor(board, 1, 5, LegacyOrientation.RIGHT, true);
+                legacyWall(board, 1, 5, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 2, 5, LegacyOrientation.RIGHT, true);
+                legacyWall(board, 2, 5, LegacyOrientation.TOP);
+                legacyConveyor(board, 3, 5, LegacyOrientation.RIGHT, true);
+                legacyWall(board, 3, 5, LegacyOrientation.BOTTOM);
+                legacyCrossing(board, 4, 5, LegacyOrientation.BOTTOM, 2, false);
+                legacyConveyor(board, 5, 5, LegacyOrientation.RIGHT, false);
+                legacyPress(board, 6, 5, 3);
+                legacyConveyor(board, 8, 5, LegacyOrientation.RIGHT, true);
+                legacyCurve(board, 9, 5, LegacyOrientation.RIGHT, 2, true);
+                legacyCurve(board, 11, 5, LegacyOrientation.TOP, 2, false);
+                legacyWall(board, 1, 6, LegacyOrientation.TOP);
+                legacyWall(board, 2, 6, LegacyOrientation.BOTTOM);
+                legacyRepair(board, 5, 6, 2);
+                legacyWall(board, 3, 6, LegacyOrientation.TOP);
+                legacyConveyor(board, 4, 6, LegacyOrientation.TOP, false);
+                legacyCrossing(board, 6, 6, LegacyOrientation.TOP, 2, false);
+                legacyConveyor(board, 7, 6, LegacyOrientation.LEFT, true);
+                legacyPusher(board, 8, 6, LegacyOrientation.TOP, 2);
+                legacyConveyor(board, 9, 6, LegacyOrientation.LEFT, true);
+                legacyConveyor(board, 10, 6, LegacyOrientation.LEFT, true);
+                legacyCrossing(board, 11, 6, LegacyOrientation.LEFT, 2, true);
+                legacyWall(board, 2, 7, LegacyOrientation.TOP);
+                legacyWall(board, 3, 7, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 4, 7, LegacyOrientation.BOTTOM, false);
+                legacyConveyor(board, 5, 7, LegacyOrientation.RIGHT, false);
+                legacyConveyor(board, 6, 7, LegacyOrientation.TOP, false);
+                legacyWall(board, 8, 7, LegacyOrientation.TOP);
+                legacyWall(board, 8, 7, LegacyOrientation.BOTTOM);
+                legacyWall(board, 9, 7, LegacyOrientation.BOTTOM);
+                legacyWall(board, 10, 7, LegacyOrientation.TOP);
+                legacyWall(board, 10, 7, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 11, 7, LegacyOrientation.BOTTOM, true);
+                legacyWall(board, 11, 7, LegacyOrientation.RIGHT);
+                legacyWall(board, 0, 8, LegacyOrientation.RIGHT);
+                legacyWall(board, 1, 8, LegacyOrientation.LEFT);
+                legacyWall(board, 2, 8, LegacyOrientation.BOTTOM);
+                legacyWall(board, 3, 8, LegacyOrientation.RIGHT);
+                legacyPress(board, 4, 8, 2);
+                legacyWall(board, 4, 8, LegacyOrientation.LEFT);
+                legacyWall(board, 5, 8, LegacyOrientation.BOTTOM);
+                legacyWall(board, 5, 8, LegacyOrientation.TOP);
+                legacyConveyor(board, 6, 8, LegacyOrientation.TOP, false);
+                legacyWall(board, 8, 8, LegacyOrientation.BOTTOM);
+                legacyWall(board, 9, 8, LegacyOrientation.TOP);
+                legacyWall(board, 10, 8, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 11, 8, LegacyOrientation.BOTTOM, true);
+                legacyWall(board, 0, 9, LegacyOrientation.LEFT);
+                legacyWall(board, 1, 9, LegacyOrientation.TOP);
+                legacyWall(board, 1, 9, LegacyOrientation.RIGHT);
+                legacyWall(board, 2, 9, LegacyOrientation.LEFT);
+                legacyWall(board, 2, 9, LegacyOrientation.RIGHT);
+                legacyWall(board, 3, 9, LegacyOrientation.LEFT);
+                legacyConveyor(board, 4, 9, LegacyOrientation.BOTTOM, false);
+                legacyPit(board, 5, 9);
+                legacyWall(board, 5, 9, LegacyOrientation.BOTTOM);
+                legacyPress(board, 6, 9, 1);
+                legacyWall(board, 7, 9, LegacyOrientation.RIGHT);
+                legacyWall(board, 8, 9, LegacyOrientation.LEFT);
+                legacyWall(board, 8, 9, LegacyOrientation.RIGHT);
+                legacyWall(board, 9, 9, LegacyOrientation.LEFT);
+                legacyWall(board, 9, 9, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 11, 9, LegacyOrientation.BOTTOM, true);
+                legacyWall(board, 11, 9, LegacyOrientation.RIGHT);
+                legacyWall(board, 1, 10, LegacyOrientation.BOTTOM);
+                legacyWall(board, 2, 10, LegacyOrientation.TOP);
+                legacyConveyor(board, 4, 10, LegacyOrientation.BOTTOM, false);
+                legacyCurve(board, 5, 10, LegacyOrientation.LEFT, 1, false);
+                legacyCurve(board, 6, 10, LegacyOrientation.TOP, 1, false);
+                legacyWall(board, 9, 10, LegacyOrientation.TOP);
+                legacyWall(board, 9, 10, LegacyOrientation.RIGHT);
+                legacyRepair(board, 10, 10, 1);
+                legacyCrossing(board, 11, 10, LegacyOrientation.BOTTOM, 1, true);
+                legacyConveyor(board, 0, 11, LegacyOrientation.RIGHT, true);
+                legacyCrossing(board, 1, 11, LegacyOrientation.RIGHT, 1, true);
+                legacyConveyor(board, 2, 11, LegacyOrientation.RIGHT, true);
+                legacyWall(board, 2, 11, LegacyOrientation.TOP);
+                legacyWall(board, 2, 11, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 3, 11, LegacyOrientation.RIGHT, true);
+                legacyCrossing(board, 4, 11, LegacyOrientation.BOTTOM, 3, false);
+                legacyWall(board, 4, 11, LegacyOrientation.TOP);
+                legacyCurve(board, 5, 11, LegacyOrientation.BOTTOM, 2, false);
+                legacyPit(board, 6, 11);
+                legacyWall(board, 7, 11, LegacyOrientation.TOP);
+                legacyWall(board, 9, 11, LegacyOrientation.TOP);
+                legacyWall(board, 9, 11, LegacyOrientation.BOTTOM);
+                legacyWall(board, 10, 11, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 11, 11, LegacyOrientation.BOTTOM, true);
+                if (only1Map) {
+                        legacyCheckpoint(board, 2, 1, 1);
+                        legacyCheckpoint(board, 9, 10, 2);
+                } else if (numberCheckpoint == 1) {
+                        legacyCheckpoint(board, 2, 1, numberCheckpoint);
+                } else {
+                        legacyCheckpoint(board, 5, 6, numberCheckpoint);
+                }
+                legacyMirrorWalls(board);
+                legacyLaser(board, 9, 2, LegacyOrientation.TOP, 2);
+                legacyLaser(board, 3, 3, LegacyOrientation.RIGHT, 1);
+                legacyLaser(board, 1, 6, LegacyOrientation.BOTTOM, 1);
+                legacyLaser(board, 2, 7, LegacyOrientation.BOTTOM, 1);
+                legacyLaser(board, 5, 8, LegacyOrientation.TOP, 1);
+                legacyLaser(board, 9, 8, LegacyOrientation.BOTTOM, 1);
+                legacyLaser(board, 2, 9, LegacyOrientation.LEFT, 2);
+                legacyLaser(board, 8, 9, LegacyOrientation.RIGHT, 2);
+                legacyLaser(board, 9, 11, LegacyOrientation.TOP, 3);
+                legacyMirrorWalls(board);
     }
 
     private void generateMap6(Board board, int numberCheckpoint, boolean only1Map) {
-
-board.getTile(11, 0).setFieldType(FieldType.PIT);
-board.getTile(11, 1).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(11, 2).addWall(Direction.WEST);
-board.getTile(11, 4).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(11, 5).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(11, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(11, 11).setFieldType(FieldType.PIT);
-board.getTile(10, 0).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(10, 1).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, true));
-board.getTile(10, 2).setFieldType(FieldType.PIT);
-board.getTile(10, 2).addWall(Direction.EAST);
-board.getTile(10, 4).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(10, 5).setFieldType(FieldType.PIT);
-board.getTile(10, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(10, 8).setFieldType(FieldType.PIT);
-board.getTile(10, 9).addWall(Direction.SOUTH);
-board.getTile(10, 10).addWall(Direction.NORTH);
-board.getTile(9, 0).addWall(Direction.NORTH);
-board.getTile(9, 1).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(9, 2).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(9, 3).addWall(Direction.WEST);
-board.getTile(9, 3).addWall(Direction.SOUTH);
-board.getTile(9, 4).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(9, 4).addWall(Direction.NORTH);
-board.getTile(9, 5).addWall(Direction.WEST);
-board.getTile(9, 6).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(9, 7).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(9, 8).addWall(Direction.WEST);
-board.getTile(9, 10).setFieldType(FieldType.REPAIR_1);
-board.getTile(9, 11).addWall(Direction.SOUTH);
-board.getTile(8, 0).addWall(Direction.SOUTH);
-board.getTile(8, 1).setFieldType(FieldType.PIT);
-board.getTile(8, 1).addWall(Direction.NORTH);
-board.getTile(8, 2).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(8, 3).setFieldType(FieldType.REPAIR_2);
-board.getTile(8, 3).addWall(Direction.EAST);
-board.getTile(8, 4).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(8, 5).addWall(Direction.EAST);
-board.getTile(8, 6).setFieldType(FieldType.PIT);
-board.getTile(8, 7).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(8, 8).setFieldType(FieldType.PIT);
-board.getTile(8, 8).addWall(Direction.SOUTH);
-board.getTile(8, 8).addWall(Direction.EAST);
-board.getTile(8, 9).addWall(Direction.NORTH);
-board.getTile(8, 10).setFieldType(FieldType.PIT);
-board.getTile(8, 10).addWall(Direction.SOUTH);
-board.getTile(8, 11).addWall(Direction.NORTH);
-board.getTile(7, 0).addWall(Direction.NORTH);
-board.getTile(7, 1).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(7, 2).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(7, 2).addWall(Direction.SOUTH);
-board.getTile(7, 3).setFieldType(FieldType.PIT);
-board.getTile(7, 3).addWall(Direction.NORTH);
-board.getTile(7, 4).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(7, 6).addWall(Direction.WEST);
-board.getTile(7, 7).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(7, 8).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(7, 11).addWall(Direction.SOUTH);
-board.getTile(6, 0).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(6, 1).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(6, 2).setFieldType(FieldType.PIT);
-board.getTile(6, 3).addWall(Direction.SOUTH);
-board.getTile(6, 3).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(6, 3).addWall(Direction.NORTH);
-board.getTile(6, 4).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(6, 6).addWall(Direction.EAST);
-board.getTile(6, 6).addWall(Direction.SOUTH);
-board.getTile(6, 7).setFieldType(FieldType.PIT);
-board.getTile(6, 7).addWall(Direction.NORTH);
-board.getTile(6, 8).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(6, 9).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(6, 10).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(6, 11).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(5, 0).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(5, 2).setFieldType(FieldType.PIT);
-board.getTile(5, 3).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(5, 4).setFieldType(FieldType.PIT);
-board.getTile(5, 4).addWall(Direction.WEST);
-board.getTile(5, 5).setFieldType(FieldType.PIT);
-board.getTile(5, 5).addWall(Direction.SOUTH);
-board.getTile(5, 6).addWall(Direction.NORTH);
-board.getTile(5, 6).addWall(Direction.WEST);
-board.getTile(5, 7).setFieldType(FieldType.REPAIR_2);
-board.getTile(5, 8).addWall(Direction.WEST);
-board.getTile(5, 9).setFieldType(FieldType.PIT);
-board.getTile(5, 10).addWall(Direction.WEST);
-board.getTile(4, 0).addWall(Direction.NORTH);
-board.getTile(4, 2).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(4, 2).addWall(Direction.EAST);
-board.getTile(4, 3).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(4, 4).addWall(Direction.EAST);
-board.getTile(4, 6).addWall(Direction.EAST);
-board.getTile(4, 8).addWall(Direction.EAST);
-board.getTile(4, 10).addWall(Direction.EAST);
-board.getTile(4, 10).addWall(Direction.SOUTH);
-board.getTile(4, 11).addWall(Direction.SOUTH);
-board.getTile(3, 1).setFieldType(FieldType.PIT);
-board.getTile(3, 2).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(3, 3).setFieldType(FieldType.PIT);
-board.getTile(3, 5).setFieldType(FieldType.PIT);
-board.getTile(3, 5).addWall(Direction.WEST);
-board.getTile(3, 10).setFieldType(FieldType.REPAIR_2);
-board.getTile(3, 7).setFieldType(FieldType.PIT);
-board.getTile(3, 7).addWall(Direction.WEST);
-board.getTile(3, 9).setFieldType(FieldType.PIT);
-board.getTile(3, 9).addWall(Direction.WEST);
-board.getTile(3, 10).addWall(Direction.WEST);
-board.getTile(2, 0).addWall(Direction.NORTH);
-board.getTile(2, 1).setFieldType(FieldType.REPAIR_1);
-board.getTile(2, 2).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(2, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(2, 5).addWall(Direction.EAST);
-board.getTile(2, 6).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(2, 7).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(2, 7).addWall(Direction.EAST);
-board.getTile(2, 9).addWall(Direction.EAST);
-board.getTile(2, 10).addWall(Direction.EAST);
-board.getTile(2, 10).addWall(Direction.SOUTH);
-board.getTile(2, 11).addWall(Direction.NORTH);
-board.getTile(2, 11).addWall(Direction.SOUTH);
-board.getTile(1, 1).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(1, 2).setConveyorBelt(new ConveyorBelt(Direction.SOUTH, false, null, false));
-board.getTile(1, 2).addWall(Direction.WEST);
-board.getTile(1, 3).addWall(Direction.SOUTH);
-board.getTile(1, 4).setFieldType(FieldType.PIT);
-board.getTile(1, 4).addWall(Direction.NORTH);
-board.getTile(1, 4).addWall(Direction.SOUTH);
-board.getTile(1, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(1, 5).addWall(Direction.NORTH);
-board.getTile(1, 6).setFieldType(FieldType.PIT);
-board.getTile(1, 7).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(1, 8).setFieldType(FieldType.PIT);
-board.getTile(1, 9).setFieldType(FieldType.PIT);
-board.getTile(1, 10).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(1, 11).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(0, 1).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(0, 2).addWall(Direction.WEST);
-board.getTile(0, 2).addWall(Direction.EAST);
-board.getTile(0, 4).addWall(Direction.WEST);
-board.getTile(0, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false, null, false));
-board.getTile(0, 6).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false, null, false));
-board.getTile(0, 7).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(0, 7).addWall(Direction.WEST);
-board.getTile(0, 8).addWall(Direction.EAST);
-board.getTile(0, 9).addWall(Direction.WEST);
-board.getTile(0, 10).setConveyorBelt(new ConveyorBelt(Direction.WEST, false, null, false));
-board.getTile(0, 11).setFieldType(FieldType.PIT);
-if (only1Map) {
-    board.getTile(10, 2).setCheckpoint(new Checkpoint(1));
-    board.getTile(0, 9).setCheckpoint(new Checkpoint(2));
-    } else if (numberCheckpoint == 1) {
-        board.getTile(10, 2).setCheckpoint(new Checkpoint(numberCheckpoint));
-        } else {
-            board.getTile(6, 7).setCheckpoint(new Checkpoint(numberCheckpoint));
-        }
-        setLaserField(board, 8, 5, Direction.WEST, 1);
+                legacyPit(board, 0, 0);
+                legacyConveyor(board, 1, 0, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 2, 0, LegacyOrientation.TOP);
+                legacyCurve(board, 4, 0, LegacyOrientation.BOTTOM, 1, false);
+                legacyCurve(board, 5, 0, LegacyOrientation.RIGHT, 2, false);
+                legacyConveyor(board, 6, 0, LegacyOrientation.TOP, false);
+                legacyPit(board, 11, 0);
+                legacyConveyor(board, 0, 1, LegacyOrientation.RIGHT, false);
+                legacyCrossing(board, 1, 1, LegacyOrientation.BOTTOM, 2, false);
+                legacyPit(board, 2, 1);
+                legacyWall(board, 2, 1, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 4, 1, LegacyOrientation.BOTTOM, false);
+                legacyPit(board, 5, 1);
+                legacyConveyor(board, 6, 1, LegacyOrientation.TOP, false);
+                legacyPit(board, 8, 1);
+                legacyWall(board, 9, 1, LegacyOrientation.RIGHT);
+                legacyWall(board, 10, 1, LegacyOrientation.LEFT);
+                legacyWall(board, 0, 2, LegacyOrientation.LEFT);
+                legacyCurve(board, 1, 2, LegacyOrientation.LEFT, 1, false);
+                legacyCurve(board, 2, 2, LegacyOrientation.BOTTOM, 2, false);
+                legacyWall(board, 3, 2, LegacyOrientation.TOP);
+                legacyWall(board, 3, 2, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 4, 2, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 4, 2, LegacyOrientation.LEFT);
+                legacyWall(board, 5, 2, LegacyOrientation.TOP);
+                legacyCurve(board, 6, 2, LegacyOrientation.TOP, 2, false);
+                legacyCurve(board, 7, 2, LegacyOrientation.RIGHT, 1, false);
+                legacyWall(board, 8, 2, LegacyOrientation.TOP);
+                legacyRepair(board, 10, 2, 1);
+                legacyWall(board, 11, 2, LegacyOrientation.RIGHT);
+                legacyWall(board, 0, 3, LegacyOrientation.RIGHT);
+                legacyPit(board, 1, 3);
+                legacyWall(board, 1, 3, LegacyOrientation.LEFT);
+                legacyConveyor(board, 2, 3, LegacyOrientation.BOTTOM, false);
+                legacyRepair(board, 3, 3, 2);
+                legacyWall(board, 3, 3, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 4, 3, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 5, 3, LegacyOrientation.BOTTOM);
+                legacyPit(board, 6, 3);
+                legacyConveyor(board, 7, 3, LegacyOrientation.TOP, false);
+                legacyPit(board, 8, 3);
+                legacyWall(board, 8, 3, LegacyOrientation.RIGHT);
+                legacyWall(board, 8, 3, LegacyOrientation.BOTTOM);
+                legacyWall(board, 9, 3, LegacyOrientation.LEFT);
+                legacyPit(board, 10, 3);
+                legacyWall(board, 10, 3, LegacyOrientation.RIGHT);
+                legacyWall(board, 11, 3, LegacyOrientation.LEFT);
+                legacyWall(board, 0, 4, LegacyOrientation.LEFT);
+                legacyCurve(board, 1, 4, LegacyOrientation.BOTTOM, 1, false);
+                legacyCurve(board, 2, 4, LegacyOrientation.RIGHT, 2, false);
+                legacyWall(board, 2, 4, LegacyOrientation.RIGHT);
+                legacyPit(board, 3, 4);
+                legacyWall(board, 3, 4, LegacyOrientation.LEFT);
+                legacyConveyor(board, 4, 4, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 6, 4, LegacyOrientation.TOP);
+                legacyCurve(board, 7, 4, LegacyOrientation.TOP, 2, false);
+                legacyCurve(board, 8, 4, LegacyOrientation.RIGHT, 1, false);
+                legacyWall(board, 11, 4, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 0, 5, LegacyOrientation.RIGHT, false);
+                legacyCurve(board, 1, 5, LegacyOrientation.RIGHT, 2, false);
+                legacyPit(board, 2, 5);
+                legacyWall(board, 3, 5, LegacyOrientation.RIGHT);
+                legacyCurve(board, 3, 5, LegacyOrientation.BOTTOM, 1, false);
+                legacyWall(board, 3, 5, LegacyOrientation.LEFT);
+                legacyCurve(board, 4, 5, LegacyOrientation.RIGHT, 2, false);
+                legacyWall(board, 6, 5, LegacyOrientation.BOTTOM);
+                legacyWall(board, 6, 5, LegacyOrientation.RIGHT);
+                legacyPit(board, 7, 5);
+                legacyWall(board, 7, 5, LegacyOrientation.LEFT);
+                legacyCurve(board, 8, 5, LegacyOrientation.TOP, 2, false);
+                legacyConveyor(board, 9, 5, LegacyOrientation.RIGHT, false);
+                legacyConveyor(board, 10, 5, LegacyOrientation.RIGHT, false);
+                legacyConveyor(board, 11, 5, LegacyOrientation.RIGHT, false);
+                legacyConveyor(board, 0, 6, LegacyOrientation.LEFT, false);
+                legacyPit(board, 2, 6);
+                legacyConveyor(board, 3, 6, LegacyOrientation.BOTTOM, false);
+                legacyPit(board, 4, 6);
+                legacyWall(board, 4, 6, LegacyOrientation.TOP);
+                legacyPit(board, 5, 6);
+                legacyWall(board, 5, 6, LegacyOrientation.RIGHT);
+                legacyWall(board, 6, 6, LegacyOrientation.LEFT);
+                legacyWall(board, 6, 6, LegacyOrientation.TOP);
+                legacyRepair(board, 7, 6, 2);
+                legacyWall(board, 8, 6, LegacyOrientation.TOP);
+                legacyPit(board, 9, 6);
+                legacyWall(board, 10, 6, LegacyOrientation.TOP);
+                legacyWall(board, 0, 7, LegacyOrientation.LEFT);
+                legacyCurve(board, 2, 7, LegacyOrientation.BOTTOM, 1, false);
+                legacyWall(board, 2, 7, LegacyOrientation.BOTTOM);
+                legacyCurve(board, 3, 7, LegacyOrientation.RIGHT, 2, false);
+                legacyWall(board, 4, 7, LegacyOrientation.BOTTOM);
+                legacyWall(board, 6, 7, LegacyOrientation.BOTTOM);
+                legacyWall(board, 8, 7, LegacyOrientation.BOTTOM);
+                legacyWall(board, 10, 7, LegacyOrientation.BOTTOM);
+                legacyWall(board, 10, 7, LegacyOrientation.RIGHT);
+                legacyWall(board, 11, 7, LegacyOrientation.RIGHT);
+                legacyPit(board, 1, 8);
+                legacyConveyor(board, 2, 8, LegacyOrientation.BOTTOM, false);
+                legacyPit(board, 3, 8);
+                legacyPit(board, 5, 8);
+                legacyWall(board, 5, 8, LegacyOrientation.TOP);
+                legacyRepair(board, 10, 8, 2);
+                legacyPit(board, 7, 8);
+                legacyWall(board, 7, 8, LegacyOrientation.TOP);
+                legacyPit(board, 9, 8);
+                legacyWall(board, 9, 8, LegacyOrientation.TOP);
+                legacyWall(board, 10, 8, LegacyOrientation.TOP);
+                legacyWall(board, 0, 9, LegacyOrientation.LEFT);
+                legacyRepair(board, 1, 9, 1);
+                legacyConveyor(board, 2, 9, LegacyOrientation.BOTTOM, false);
+                legacyCurve(board, 5, 9, LegacyOrientation.BOTTOM, 1, false);
+                legacyWall(board, 5, 9, LegacyOrientation.BOTTOM);
+                legacyConveyor(board, 6, 9, LegacyOrientation.RIGHT, false);
+                legacyCurve(board, 7, 9, LegacyOrientation.RIGHT, 1, false);
+                legacyWall(board, 7, 9, LegacyOrientation.BOTTOM);
+                legacyWall(board, 9, 9, LegacyOrientation.BOTTOM);
+                legacyWall(board, 10, 9, LegacyOrientation.BOTTOM);
+                legacyWall(board, 10, 9, LegacyOrientation.RIGHT);
+                legacyWall(board, 11, 9, LegacyOrientation.LEFT);
+                legacyWall(board, 11, 9, LegacyOrientation.RIGHT);
+                legacyCurve(board, 1, 10, LegacyOrientation.BOTTOM, 1, false);
+                legacyCurve(board, 2, 10, LegacyOrientation.RIGHT, 2, false);
+                legacyWall(board, 2, 10, LegacyOrientation.TOP);
+                legacyWall(board, 3, 10, LegacyOrientation.RIGHT);
+                legacyPit(board, 4, 10);
+                legacyWall(board, 4, 10, LegacyOrientation.LEFT);
+                legacyWall(board, 4, 10, LegacyOrientation.RIGHT);
+                legacyConveyor(board, 5, 10, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 5, 10, LegacyOrientation.LEFT);
+                legacyPit(board, 6, 10);
+                legacyConveyor(board, 7, 10, LegacyOrientation.TOP, false);
+                legacyPit(board, 8, 10);
+                legacyPit(board, 9, 10);
+                legacyCurve(board, 10, 10, LegacyOrientation.LEFT, 2, false);
+                legacyConveyor(board, 11, 10, LegacyOrientation.LEFT, false);
+                legacyConveyor(board, 1, 11, LegacyOrientation.BOTTOM, false);
+                legacyWall(board, 2, 11, LegacyOrientation.TOP);
+                legacyWall(board, 2, 11, LegacyOrientation.BOTTOM);
+                legacyWall(board, 4, 11, LegacyOrientation.TOP);
+                legacyConveyor(board, 5, 11, LegacyOrientation.BOTTOM, false);
+                legacyCurve(board, 6, 11, LegacyOrientation.LEFT, 2, false);
+                legacyCurve(board, 7, 11, LegacyOrientation.TOP, 1, false);
+                legacyWall(board, 7, 11, LegacyOrientation.TOP);
+                legacyWall(board, 8, 11, LegacyOrientation.BOTTOM);
+                legacyWall(board, 9, 11, LegacyOrientation.TOP);
+                legacyConveyor(board, 10, 11, LegacyOrientation.TOP, false);
+                legacyPit(board, 11, 11);
+                if (only1Map) {
+                        legacyCheckpoint(board, 2, 1, 1);
+                        legacyCheckpoint(board, 9, 11, 2);
+                } else if (numberCheckpoint == 1) {
+                        legacyCheckpoint(board, 2, 1, numberCheckpoint);
+                } else {
+                        legacyCheckpoint(board, 7, 5, numberCheckpoint);
+                }
+                legacyLaser(board, 5, 3, LegacyOrientation.TOP, 1);
+                legacyMirrorWalls(board);
     }
-
 }
