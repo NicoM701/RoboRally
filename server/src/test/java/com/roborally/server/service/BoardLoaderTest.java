@@ -38,6 +38,18 @@ class BoardLoaderTest {
     }
 
     @Test
+    @DisplayName("Default board: start positions are marked as START tiles")
+    void defaultBoard_startPositionsAreMarkedAsStartTiles() {
+        Board board = boardLoader.createDefaultBoard("Test");
+
+        for (int[] startPosition : board.getStartPositions()) {
+            Tile tile = board.getTile(startPosition[0], startPosition[1]);
+            assertNotNull(tile);
+            assertTrue(tile.isStart(), "Expected start tile at (" + startPosition[0] + "," + startPosition[1] + ")");
+        }
+    }
+
+    @Test
     @DisplayName("Default board: has checkpoints")
     void defaultBoard_hasCheckpoints() {
         Board board = boardLoader.createDefaultBoard("Test");
@@ -177,6 +189,24 @@ class BoardLoaderTest {
         assertEquals(12, map.get("height"));
         assertNotNull(map.get("tiles"));
         assertNotNull(map.get("lasers"));
+    }
+
+    @Test
+    @DisplayName("Default board: serialized tiles include START fields for start positions")
+    @SuppressWarnings("unchecked")
+    void defaultBoard_toMapIncludesStartTiles() {
+        Board board = boardLoader.createDefaultBoard("Test");
+
+        var map = board.toMap();
+        var tiles = (java.util.List<java.util.Map<String, Object>>) map.get("tiles");
+
+        for (int[] startPosition : board.getStartPositions()) {
+            assertTrue(tiles.stream().anyMatch(tile ->
+                            startPosition[0] == ((Number) tile.get("x")).intValue()
+                                    && startPosition[1] == ((Number) tile.get("y")).intValue()
+                                    && "START".equals(tile.get("type"))),
+                    "Expected serialized START tile at (" + startPosition[0] + "," + startPosition[1] + ")");
+        }
     }
 
     @Test

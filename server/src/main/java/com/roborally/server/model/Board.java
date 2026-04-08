@@ -70,6 +70,10 @@ public class Board {
 
     public void addStartPosition(int x, int y) {
         startPositions.add(new int[] { x, y });
+        Tile tile = getTile(x, y);
+        if (tile != null) {
+            tile.setFieldType(FieldType.START);
+        }
     }
 
     public int getTotalCheckpoints() {
