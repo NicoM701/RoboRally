@@ -66,16 +66,14 @@ class BoardLoaderTest {
     }
 
     @Test
-    @DisplayName("Map1: legacy checkpoint replacement clears the underlying belt tile")
-    void map1_checkpointReplacementClearsUnderlyingTile() {
+    @DisplayName("Map1: repair tiles keep walls from the legacy layout")
+    void map1_repairTilePreservesLegacyWalls() {
         Board board = boardLoader.createDefaultBoard("map1");
-        Tile checkpointTile = board.getTile(8, 7);
+        Tile repairTile = board.getTile(3, 1);
 
-        assertNotNull(checkpointTile.getCheckpoint());
-        assertEquals(2, checkpointTile.getCheckpoint().getNumber());
-        assertNull(checkpointTile.getConveyorBelt());
-        assertTrue(checkpointTile.hasWall(Direction.WEST));
-        assertTrue(checkpointTile.hasWall(Direction.NORTH));
+        assertTrue(repairTile.isRepair());
+        assertTrue(repairTile.hasWall(Direction.EAST));
+        assertTrue(repairTile.hasWall(Direction.SOUTH));
     }
 
     @Test
@@ -116,14 +114,16 @@ class BoardLoaderTest {
     }
 
     @Test
-    @DisplayName("Map4: checkpoint replacement clears the old conveyor curve")
-    void map4_checkpointReplacementClearsUnderlyingConveyor() {
+    @DisplayName("Map4: checkpoints keep the underlying legacy conveyor metadata")
+    void map4_checkpointPreservesUnderlyingConveyor() {
         Board board = boardLoader.createDefaultBoard("map4");
         Tile checkpointTile = board.getTile(1, 10);
 
         assertNotNull(checkpointTile.getCheckpoint());
         assertEquals(1, checkpointTile.getCheckpoint().getNumber());
-        assertNull(checkpointTile.getConveyorBelt());
+        assertNotNull(checkpointTile.getConveyorBelt());
+        assertEquals(Direction.EAST, checkpointTile.getConveyorBelt().getDirection());
+        assertEquals(RotationDirection.COUNTERCLOCKWISE, checkpointTile.getConveyorBelt().getCurveRotation());
     }
 
     @Test
@@ -148,6 +148,21 @@ class BoardLoaderTest {
         assertNotNull(belt.getConveyorBelt());
         assertTrue(belt.getConveyorBelt().isExpress());
         assertEquals(Direction.WEST, belt.getConveyorBelt().getDirection());
+    }
+
+    @Test
+    @DisplayName("Map5: laser source tiles keep walls and still mirror them to neighbors")
+    void map5_laserSourcePreservesWallsAndMirroring() {
+        Board board = boardLoader.createDefaultBoard("map5");
+        Tile sourceTile = board.getTile(9, 0);
+
+        assertTrue(sourceTile.hasWall(Direction.NORTH));
+        assertTrue(sourceTile.hasWall(Direction.SOUTH));
+        assertTrue(board.getTile(9, 1).hasWall(Direction.NORTH));
+        assertTrue(board.getLasers().stream().anyMatch(laser ->
+                laser.getX() == 9 && laser.getY() == 0
+                        && laser.getDirection() == Direction.NORTH
+                        && laser.getStrength() == 3));
     }
 
     @Test

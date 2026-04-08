@@ -43,6 +43,8 @@ public class BoardLoader {
             default -> generateMap1(board, 1, true);
         }
 
+        legacyMirrorWalls(board);
+
         if (board.getStartPositions().isEmpty()) {
             int maxSpawns = 8;
             if (normalizedName.equals("map1") || normalizedName.equals("map2")) maxSpawns = 2;
@@ -70,9 +72,8 @@ public class BoardLoader {
     }
 
     private Tile replaceLegacyTile(Board board, int legacyX, int legacyY, FieldType type) {
-        int screenY = legacyScreenY(board, legacyY);
-        Tile tile = new Tile(legacyX, screenY, type);
-        board.setTile(legacyX, screenY, tile);
+        Tile tile = legacyTile(board, legacyX, legacyY);
+        tile.setFieldType(type);
         return tile;
     }
 
@@ -155,7 +156,6 @@ public class BoardLoader {
 
     private void legacyLaser(Board board, int legacyX, int legacyY, LegacyOrientation orientation, int power) {
         int screenY = legacyScreenY(board, legacyY);
-        replaceLegacyTile(board, legacyX, legacyY, FieldType.FLOOR);
         board.addLaser(new Laser(legacyX, screenY, legacyDirection(orientation), power));
     }
 
@@ -329,12 +329,10 @@ public class BoardLoader {
                                 legacyCheckpoint(board, 8, 4, 2);
                         }
                 }
-                legacyMirrorWalls(board);
                 legacyLaser(board, 8, 3, LegacyOrientation.RIGHT, 2);
                 legacyLaser(board, 3, 4, LegacyOrientation.BOTTOM, 1);
                 legacyLaser(board, 9, 7, LegacyOrientation.RIGHT, 1);
                 legacyLaser(board, 3, 9, LegacyOrientation.BOTTOM, 1);
-                legacyMirrorWalls(board);
     }
 
     private void generateMap2(Board board, int numberCheckpoint, boolean only1Map) {
@@ -463,9 +461,7 @@ public class BoardLoader {
                 } else {
                         legacyCheckpoint(board, 6, 6, numberCheckpoint);
                 }
-                legacyMirrorWalls(board);
                 legacyLaser(board, 11, 9, LegacyOrientation.LEFT, 1);
-                legacyMirrorWalls(board);
     }
 
     private void generateMap3(Board board, int numberCheckpoint, boolean only1Map) {
@@ -573,7 +569,6 @@ public class BoardLoader {
                 } else {
                         legacyCheckpoint(board, 4, 4, numberCheckpoint);
                 }
-                legacyMirrorWalls(board);
     }
 
     private void generateMap4(Board board, int numberCheckpoint, boolean only1Map) {
@@ -691,10 +686,8 @@ public class BoardLoader {
                 } else {
                         legacyCheckpoint(board, 8, 8, numberCheckpoint);
                 }
-                legacyMirrorWalls(board);
                 legacyLaser(board, 7, 5, LegacyOrientation.LEFT, 1);
                 legacyLaser(board, 8, 6, LegacyOrientation.LEFT, 1);
-                legacyMirrorWalls(board);
     }
 
     private void generateMap5(Board board, int numberCheckpoint, boolean only1Map) {
@@ -874,7 +867,6 @@ public class BoardLoader {
                 } else {
                         legacyCheckpoint(board, 5, 6, numberCheckpoint);
                 }
-                legacyMirrorWalls(board);
                 legacyLaser(board, 9, 2, LegacyOrientation.TOP, 2);
                 legacyLaser(board, 3, 3, LegacyOrientation.RIGHT, 1);
                 legacyLaser(board, 1, 6, LegacyOrientation.BOTTOM, 1);
@@ -884,7 +876,6 @@ public class BoardLoader {
                 legacyLaser(board, 2, 9, LegacyOrientation.LEFT, 2);
                 legacyLaser(board, 8, 9, LegacyOrientation.RIGHT, 2);
                 legacyLaser(board, 9, 11, LegacyOrientation.TOP, 3);
-                legacyMirrorWalls(board);
     }
 
     private void generateMap6(Board board, int numberCheckpoint, boolean only1Map) {
@@ -1044,6 +1035,5 @@ public class BoardLoader {
                         legacyCheckpoint(board, 7, 5, numberCheckpoint);
                 }
                 legacyLaser(board, 5, 3, LegacyOrientation.TOP, 1);
-                legacyMirrorWalls(board);
     }
 }
