@@ -472,6 +472,33 @@ const App = (() => {
         return ASSETS[src].complete && ASSETS[src].naturalWidth > 0 ? ASSETS[src] : null;
     }
 
+    function normalizeCurveRotation(curveRotation) {
+        if (curveRotation === 'LEFT' || curveRotation === 'RIGHT') return curveRotation;
+        if (!curveRotation) return null;
+        if (curveRotation === 'CLOCKWISE') return 'RIGHT';
+        if (curveRotation === 'COUNTERCLOCKWISE') return 'LEFT';
+        return null;
+    }
+
+    function getCurveRotationFromDirections(curveFrom, direction) {
+        if (!curveFrom || !direction) return null;
+        const clockwiseTurns = {
+            NORTH: 'EAST',
+            EAST: 'SOUTH',
+            SOUTH: 'WEST',
+            WEST: 'NORTH'
+        };
+        if (clockwiseTurns[curveFrom] === direction) return 'RIGHT';
+        const counterClockwiseTurns = {
+            NORTH: 'WEST',
+            WEST: 'SOUTH',
+            SOUTH: 'EAST',
+            EAST: 'NORTH'
+        };
+        if (counterClockwiseTurns[curveFrom] === direction) return 'LEFT';
+        return null;
+    }
+
     function getTileLayerPaths(t) {
         if (t.type === 'PIT') return ['/assets/fields/PIT_TOP.png'];
         const layers = ['/assets/fields/DEFAULT_TOP.png'];
@@ -484,10 +511,12 @@ const App = (() => {
         if (t.conveyorBelt) {
             const pre = t.conveyorBelt.express ? 'EXPRESS_BELT_' : 'CONVEYOR_BELT_';
             let dir = dirMap[t.conveyorBelt.direction] || 'TOP';
+            const curveRotation = normalizeCurveRotation(t.conveyorBelt.curveRotation)
+                || getCurveRotationFromDirections(t.conveyorBelt.curveFrom, t.conveyorBelt.direction);
             
-            if (t.conveyorBelt.curveRotation) {
+            if (curveRotation) {
                 const curveMap = { LEFT: 'LEFT_', RIGHT: 'RIGHT_' };
-                const cDir = curveMap[t.conveyorBelt.curveRotation];
+                const cDir = curveMap[curveRotation];
                 layers.push(`/assets/fields/${pre}CURVE_${cDir}${dir}.png`);
             } else if (t.conveyorBelt.crossing) {
                 layers.push(`/assets/fields/${pre}CROSSING_LEFTRIGHT_${dir}.png`);

@@ -21,9 +21,13 @@ public class ConveyorBelt {
         this.express = express;
     }
 
+    public ConveyorBelt(Direction direction, boolean express, Direction curveFrom) {
+        this(direction, express);
+        this.curveFrom = curveFrom;
+    }
+
     public ConveyorBelt(Direction direction, boolean express, RotationDirection curveRotation, boolean crossing) {
-        this.direction = direction;
-        this.express = express;
+        this(direction, express);
         this.curveRotation = curveRotation;
         this.crossing = crossing;
     }
@@ -37,7 +41,19 @@ public class ConveyorBelt {
     }
 
     public RotationDirection getCurveRotation() {
-        return curveRotation;
+        if (curveRotation != null) {
+            return curveRotation;
+        }
+        if (curveFrom == null) {
+            return null;
+        }
+        if (curveFrom.rotateClockwise() == direction) {
+            return RotationDirection.CLOCKWISE;
+        }
+        if (curveFrom.rotateCounterClockwise() == direction) {
+            return RotationDirection.COUNTERCLOCKWISE;
+        }
+        return null;
     }
 
     public void setCurveRotation(RotationDirection curveRotation) {
@@ -61,16 +77,20 @@ public class ConveyorBelt {
     }
 
     public boolean isCurve() {
-        return curveRotation != null;
+        return getCurveRotation() != null;
     }
 
     public Map<String, Object> toMap() {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("direction", direction.name());
         m.put("express", express);
-        if (curveRotation != null) {
+        RotationDirection resolvedCurveRotation = getCurveRotation();
+        if (resolvedCurveRotation != null) {
             // "LEFT" corresponds to COUNTERCLOCKWISE turn, "RIGHT" to CLOCKWISE
-            m.put("curveRotation", curveRotation == RotationDirection.CLOCKWISE ? "RIGHT" : "LEFT");
+            m.put("curveRotation", resolvedCurveRotation == RotationDirection.CLOCKWISE ? "RIGHT" : "LEFT");
+        }
+        if (curveFrom != null) {
+            m.put("curveFrom", curveFrom.name());
         }
         if (crossing) {
             m.put("crossing", true);

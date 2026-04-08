@@ -73,31 +73,57 @@ public class BoardLoader {
             for (int x = 0; x < board.getWidth(); x++) {
                 Tile tile = board.getTile(x, y);
                 if (tile == null || tile.getConveyorBelt() == null) continue;
-                
+
                 ConveyorBelt cb = tile.getConveyorBelt();
                 Direction outDir = cb.getDirection();
-                
-                Direction inDir = null;
-                int inputs = 0;
+                List<Direction> inputDirs = new ArrayList<>();
+
+                cb.setCurveRotation(null);
+                cb.setCurveFrom(null);
+
                 for (Direction d : Direction.values()) {
-                    int nx = x + (d == Direction.EAST ? 1 : (d == Direction.WEST ? -1 : 0));
-                    int ny = y + (d == Direction.SOUTH ? 1 : (d == Direction.NORTH ? -1 : 0));
-                    Tile n = board.getTile(nx, ny);
-                    if (n != null && n.getConveyorBelt() != null) {
-                        if (n.getConveyorBelt().getDirection() == d.opposite()) {
-                            inDir = d;
-                            inputs++;
-                        }
+                    int nx = x + d.dx();
+                    int ny = y + d.dy();
+                    Tile neighbor = board.getTile(nx, ny);
+                    if (neighbor != null && neighbor.getConveyorBelt() != null
+                            && neighbor.getConveyorBelt().getDirection() == d.opposite()) {
+                        inputDirs.add(d);
                     }
                 }
-                
-                if (inputs > 0 && inDir.opposite() != outDir && !cb.isCrossing()) {
-                    RotationDirection rot = (inDir.rotateClockwise() == outDir) ? RotationDirection.CLOCKWISE : RotationDirection.COUNTERCLOCKWISE;
+
+                if (cb.isCrossing() || inputDirs.isEmpty()) {
+                    continue;
+                }
+
+                List<Direction> turningInputs = inputDirs.stream()
+                        .filter(inDir -> inDir.opposite() != outDir)
+                        .toList();
+
+                boolean hasStraightInput = inputDirs.stream()
+                        .anyMatch(inDir -> inDir.opposite() == outDir);
+
+                if (hasStraightInput || turningInputs.size() != 1) {
+                    continue;
+                }
+
+                Direction curveFrom = turningInputs.get(0);
+                RotationDirection rot = determineCurveRotation(curveFrom, outDir);
+                if (rot != null) {
+                    cb.setCurveFrom(curveFrom);
                     cb.setCurveRotation(rot);
-                    cb.setCurveFrom(inDir);
                 }
             }
         }
+    }
+
+    private RotationDirection determineCurveRotation(Direction curveFrom, Direction outDir) {
+        if (curveFrom.rotateClockwise() == outDir) {
+            return RotationDirection.CLOCKWISE;
+        }
+        if (curveFrom.rotateCounterClockwise() == outDir) {
+            return RotationDirection.COUNTERCLOCKWISE;
+        }
+        return null;
     }
 
     private void setLaserField(Board board, int x, int y, Direction dir, int strength) {
