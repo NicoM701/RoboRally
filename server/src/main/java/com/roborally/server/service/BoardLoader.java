@@ -66,8 +66,8 @@ public class BoardLoader {
                         directionFromLegacy(op.orientation()), op.value());
                 case PRESS -> applyPress(tileAtLegacy(board, op.x(), op.y()), op.value());
                 case LASER -> board.addLaser(new Laser(
-                        boardXFromLegacy(board, op.y()),
-                        boardYFromLegacy(op.x()),
+                        boardXFromLegacy(op.x()),
+                        boardYFromLegacy(board, op.y()),
                         directionFromLegacy(op.orientation()),
                         op.value()));
             }
@@ -75,37 +75,37 @@ public class BoardLoader {
     }
 
     /**
-     * Old Board.java stores fields as {@code fields[x][y]} with {@code y} increasing upward.
-     * The current board payload is a top-left-origin grid with {@code y} increasing downward.
-     * Matching the tracked legacy previews requires one central 90° counter-clockwise adapter:
-     * {@code legacy(x, y) -> board(width - 1 - y, x)}.
+     * Old Board.java uses {@code fields[x][y]} with the origin at the bottom-left.
+     *
+     * <p>The old JavaFX client rendered those fields with the same {@code x} coordinate and only flipped
+     * {@code y} on draw ({@code drawY = height - y - 1}). The clean adapter therefore is just a vertical flip:
+     * {@code legacy(x, y) -> board(x, height - 1 - y)}.</p>
      */
-    private int boardXFromLegacy(Board board, int legacyY) {
-        return board.getWidth() - 1 - legacyY;
-    }
-
-    private int boardYFromLegacy(int legacyX) {
+    private int boardXFromLegacy(int legacyX) {
         return legacyX;
     }
 
+    private int boardYFromLegacy(Board board, int legacyY) {
+        return board.getHeight() - 1 - legacyY;
+    }
+
     private Tile tileAtLegacy(Board board, int legacyX, int legacyY) {
-        return board.getTile(boardXFromLegacy(board, legacyY), boardYFromLegacy(legacyX));
+        return board.getTile(boardXFromLegacy(legacyX), boardYFromLegacy(board, legacyY));
     }
 
     private Direction directionFromLegacy(LegacyOrientation legacyOrientation) {
         return switch (legacyOrientation) {
-            case LEFT -> Direction.NORTH;
-            case RIGHT -> Direction.SOUTH;
-            case TOP -> Direction.WEST;
-            case BOTTOM -> Direction.EAST;
+            case LEFT -> Direction.WEST;
+            case RIGHT -> Direction.EAST;
+            case TOP -> Direction.NORTH;
+            case BOTTOM -> Direction.SOUTH;
         };
     }
 
     private RotationDirection gearRotationFromLegacy(LegacyOrientation legacyOrientation) {
         return switch (legacyOrientation) {
-            case LEFT -> RotationDirection.COUNTERCLOCKWISE;
-            case RIGHT -> RotationDirection.CLOCKWISE;
-            default -> throw new IllegalArgumentException("Unsupported legacy gear orientation: " + legacyOrientation);
+            case LEFT, TOP -> RotationDirection.CLOCKWISE;
+            case RIGHT, BOTTOM -> RotationDirection.COUNTERCLOCKWISE;
         };
     }
 
@@ -131,10 +131,7 @@ public class BoardLoader {
     }
 
     private void applyCheckpoint(Tile tile, int checkpointNumber) {
-        tile.setFieldType(FieldType.FLOOR);
-        tile.setGear(null);
-        tile.setPusher(null);
-        tile.setPress(null);
+        resetTile(tile, FieldType.FLOOR);
         tile.setCheckpoint(new Checkpoint(checkpointNumber));
     }
 
@@ -164,12 +161,30 @@ public class BoardLoader {
 
     private void applyPusher(Tile tile, Direction direction, int activeStep) {
         resetTile(tile, FieldType.FLOOR);
-        tile.setPusher(new Pusher(direction, Set.of(activeStep)));
+        tile.setPusher(new Pusher(direction, pusherStepsFromLegacy(activeStep)));
     }
 
     private void applyPress(Tile tile, int activeStep) {
         resetTile(tile, FieldType.FLOOR);
-        tile.setPress(new Press(Set.of(activeStep)));
+        tile.setPress(new Press(pressStepsFromLegacy(activeStep)));
+    }
+
+    private Set<Integer> pusherStepsFromLegacy(int legacyTurn) {
+        return switch (legacyTurn) {
+            case 1 -> Set.of(1);
+            case 2 -> Set.of(2);
+            case 3 -> Set.of(3);
+            case 4 -> Set.of(2, 4);
+            default -> Set.of(1, 3, 5);
+        };
+    }
+
+    private Set<Integer> pressStepsFromLegacy(int legacyRoundsActive) {
+        return switch (legacyRoundsActive) {
+            case 2, 4 -> Set.of(2, 4);
+            case 3 -> Set.of(3);
+            default -> Set.of(1, 5);
+        };
     }
 
     private void mirrorLegacyWalls(Board board) {

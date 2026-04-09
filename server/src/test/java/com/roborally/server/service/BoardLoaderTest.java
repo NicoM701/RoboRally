@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -62,28 +63,21 @@ class BoardLoaderTest {
     }
 
     @Test
-    @DisplayName("Default board: map1 fallback still includes legacy lasers")
-    void defaultBoard_hasLasers() {
-        Board board = boardLoader.createDefaultBoard("Test");
-
-        assertFalse(board.getLasers().isEmpty());
-    }
-
-    @Test
-    @DisplayName("Map1: legacy coordinates land on the expected board squares")
-    void map1_positionsMatchLegacyTransform() {
+    @DisplayName("Map1: legacy coordinates are flipped vertically, not rotated")
+    void map1_positionsMatchLegacyRendererCoordinates() {
         Board board = boardLoader.createDefaultBoard("map1");
 
-        assertTrue(board.getTile(9, 3).isPit());
+        assertTrue(board.getTile(3, 9).isPit());
+        assertTrue(board.getTile(10, 10).isRepair());
 
-        ConveyorBelt firstBelt = board.getTile(0, 5).getConveyorBelt();
-        assertNotNull(firstBelt);
-        assertEquals(Direction.EAST, firstBelt.getDirection());
+        ConveyorBelt belt = board.getTile(5, 11).getConveyorBelt();
+        assertNotNull(belt);
+        assertEquals(Direction.SOUTH, belt.getDirection());
 
-        ConveyorBelt topRightCurve = board.getTile(11, 10).getConveyorBelt();
-        assertNotNull(topRightCurve);
-        assertEquals(Direction.WEST, topRightCurve.getDirection());
-        assertEquals(RotationDirection.CLOCKWISE, topRightCurve.getCurveRotation());
+        ConveyorBelt curve = board.getTile(11, 11).getConveyorBelt();
+        assertNotNull(curve);
+        assertEquals(Direction.EAST, curve.getDirection());
+        assertEquals(RotationDirection.COUNTERCLOCKWISE, curve.getCurveRotation());
     }
 
     @Test
@@ -91,21 +85,12 @@ class BoardLoaderTest {
     void map1_checkpointsMatchLegacyBoardPositions() {
         Board board = boardLoader.createDefaultBoard("map1");
 
-        assertNotNull(board.getTile(4, 1).getCheckpoint());
-        assertEquals(1, board.getTile(4, 1).getCheckpoint().getNumber());
-        assertNotNull(board.getTile(7, 8).getCheckpoint());
-        assertEquals(2, board.getTile(7, 8).getCheckpoint().getNumber());
-    }
+        assertNotNull(board.getTile(1, 4).getCheckpoint());
+        assertEquals(1, board.getTile(1, 4).getCheckpoint().getNumber());
+        assertNull(board.getTile(1, 4).getConveyorBelt(), "Checkpoint tiles replace the old field semantics");
 
-    @Test
-    @DisplayName("Map1: repair tiles keep the legacy wall layout")
-    void map1_repairTilePreservesLegacyWalls() {
-        Board board = boardLoader.createDefaultBoard("map1");
-        Tile repairTile = board.getTile(1, 3);
-
-        assertTrue(repairTile.isRepair());
-        assertTrue(repairTile.hasWall(Direction.EAST));
-        assertTrue(repairTile.hasWall(Direction.SOUTH));
+        assertNotNull(board.getTile(8, 7).getCheckpoint());
+        assertEquals(2, board.getTile(8, 7).getCheckpoint().getNumber());
     }
 
     @Test
@@ -113,25 +98,25 @@ class BoardLoaderTest {
     void map1_mirrorsLegacyWalls() {
         Board board = boardLoader.createDefaultBoard("map1");
 
-        assertTrue(board.getTile(10, 3).hasWall(Direction.SOUTH));
-        assertTrue(board.getTile(10, 4).hasWall(Direction.NORTH));
+        assertTrue(board.getTile(2, 11).hasWall(Direction.SOUTH));
+        assertTrue(board.getTile(2, 10).hasWall(Direction.NORTH));
     }
 
     @Test
-    @DisplayName("Map1: conveyor curve and crossing semantics survive the legacy adapter")
+    @DisplayName("Map1: conveyor curve and crossing semantics match the legacy board")
     void map1_conveyorMetadataMatchesLegacyBoard() {
         Board board = boardLoader.createDefaultBoard("map1");
 
-        ConveyorBelt curve = board.getTile(11, 10).getConveyorBelt();
+        ConveyorBelt curve = board.getTile(11, 11).getConveyorBelt();
         assertNotNull(curve);
-        assertEquals(Direction.WEST, curve.getDirection());
-        assertEquals(RotationDirection.CLOCKWISE, curve.getCurveRotation());
+        assertEquals(Direction.EAST, curve.getDirection());
+        assertEquals(RotationDirection.COUNTERCLOCKWISE, curve.getCurveRotation());
 
-        ConveyorBelt crossing = board.getTile(6, 1).getConveyorBelt();
+        ConveyorBelt crossing = board.getTile(1, 6).getConveyorBelt();
         assertNotNull(crossing);
         assertTrue(crossing.isCrossing());
         assertEquals("RIGHT", crossing.getCrossingType());
-        assertEquals(Direction.SOUTH, crossing.getDirection());
+        assertEquals(Direction.EAST, crossing.getDirection());
     }
 
     @Test
@@ -140,10 +125,31 @@ class BoardLoaderTest {
         Board board = boardLoader.createDefaultBoard("map1");
 
         assertTrue(board.getLasers().stream().anyMatch(laser ->
-                laser.getX() == 8 && laser.getY() == 8 && laser.getDirection() == Direction.SOUTH && laser.getStrength() == 2));
+                laser.getX() == 8 && laser.getY() == 8 && laser.getDirection() == Direction.EAST && laser.getStrength() == 2));
         assertTrue(board.getLasers().stream().anyMatch(laser ->
-                laser.getX() == 7 && laser.getY() == 3 && laser.getDirection() == Direction.EAST && laser.getStrength() == 1));
+                laser.getX() == 3 && laser.getY() == 7 && laser.getDirection() == Direction.SOUTH && laser.getStrength() == 1));
         assertEquals(4, board.getLasers().size());
+    }
+
+    @Test
+    @DisplayName("Map1: category counts match the legacy BoardTest expectations")
+    void map1_countsMatchLegacyBoardTest() {
+        Board board = boardLoader.createDefaultBoard("map1");
+
+        assertEquals(64, countPlainFloorTiles(board));
+        assertEquals(40, countBelts(board, false, false, false));
+        assertEquals(18, countBelts(board, false, true, false));
+        assertEquals(2, countBelts(board, false, false, true));
+        assertEquals(2, countCheckpoints(board));
+        assertEquals(3, countRepairs(board));
+        assertEquals(4, board.getLasers().size());
+        assertEquals(11, countPits(board));
+        assertEquals(0, countBelts(board, true, false, false));
+        assertEquals(0, countBelts(board, true, true, false));
+        assertEquals(0, countBelts(board, true, false, true));
+        assertEquals(0, countGears(board));
+        assertEquals(0, countPresses(board));
+        assertEquals(0, countPushers(board));
     }
 
     @Test
@@ -151,10 +157,10 @@ class BoardLoaderTest {
     void map2_checkpointsMatchLegacyBoardPositions() {
         Board board = boardLoader.createDefaultBoard("map2");
 
-        assertNotNull(board.getTile(9, 2).getCheckpoint());
-        assertEquals(1, board.getTile(9, 2).getCheckpoint().getNumber());
-        assertNotNull(board.getTile(1, 9).getCheckpoint());
-        assertEquals(2, board.getTile(1, 9).getCheckpoint().getNumber());
+        assertNotNull(board.getTile(2, 9).getCheckpoint());
+        assertEquals(1, board.getTile(2, 9).getCheckpoint().getNumber());
+        assertNotNull(board.getTile(9, 1).getCheckpoint());
+        assertEquals(2, board.getTile(9, 1).getCheckpoint().getNumber());
     }
 
     @Test
@@ -162,10 +168,10 @@ class BoardLoaderTest {
     void map2_hasLegacyGearDirections() {
         Board board = boardLoader.createDefaultBoard("map2");
 
-        assertNotNull(board.getTile(8, 3).getGear());
-        assertEquals(RotationDirection.COUNTERCLOCKWISE, board.getTile(8, 3).getGear().getRotation());
-        assertNotNull(board.getTile(1, 10).getGear());
-        assertEquals(RotationDirection.CLOCKWISE, board.getTile(1, 10).getGear().getRotation());
+        assertNotNull(board.getTile(3, 8).getGear());
+        assertEquals(RotationDirection.CLOCKWISE, board.getTile(3, 8).getGear().getRotation());
+        assertNotNull(board.getTile(10, 1).getGear());
+        assertEquals(RotationDirection.COUNTERCLOCKWISE, board.getTile(10, 1).getGear().getRotation());
     }
 
     @Test
@@ -173,13 +179,52 @@ class BoardLoaderTest {
     void map2_expressBeltsAndLaserMatchLegacyBoard() {
         Board board = boardLoader.createDefaultBoard("map2");
 
-        ConveyorBelt expressBelt = board.getTile(11, 5).getConveyorBelt();
+        ConveyorBelt expressBelt = board.getTile(5, 11).getConveyorBelt();
         assertNotNull(expressBelt);
         assertTrue(expressBelt.isExpress());
-        assertEquals(Direction.EAST, expressBelt.getDirection());
+        assertEquals(Direction.SOUTH, expressBelt.getDirection());
 
         assertTrue(board.getLasers().stream().anyMatch(laser ->
-                laser.getX() == 2 && laser.getY() == 11 && laser.getDirection() == Direction.NORTH && laser.getStrength() == 1));
+                laser.getX() == 11 && laser.getY() == 2 && laser.getDirection() == Direction.WEST && laser.getStrength() == 1));
+    }
+
+    @Test
+    @DisplayName("Map2: category counts match the legacy BoardTest expectations")
+    void map2_countsMatchLegacyBoardTest() {
+        Board board = boardLoader.createDefaultBoard("map2");
+
+        assertEquals(64, countPlainFloorTiles(board));
+        assertEquals(55, countBelts(board, false, false, false));
+        assertEquals(0, countBelts(board, false, true, false));
+        assertEquals(0, countBelts(board, false, false, true));
+        assertEquals(2, countCheckpoints(board));
+        assertEquals(3, countRepairs(board));
+        assertEquals(1, board.getLasers().size());
+        assertEquals(2, countPits(board));
+        assertEquals(13, countBelts(board, true, false, false));
+        assertEquals(0, countBelts(board, true, true, false));
+        assertEquals(0, countBelts(board, true, false, true));
+        assertEquals(4, countGears(board));
+        assertEquals(0, countPresses(board));
+        assertEquals(0, countPushers(board));
+    }
+
+    @Test
+    @DisplayName("Map4: legacy pusher round patterns are preserved")
+    void map4_pushersKeepLegacyRoundPatterns() {
+        Board board = boardLoader.createDefaultBoard("map4");
+
+        assertEquals(Set.of(2, 4), board.getTile(2, 11).getPusher().getActiveSteps());
+        assertEquals(Set.of(1, 3, 5), board.getTile(4, 11).getPusher().getActiveSteps());
+    }
+
+    @Test
+    @DisplayName("Map5: legacy press round patterns are preserved")
+    void map5_pressesKeepLegacyRoundPatterns() {
+        Board board = boardLoader.createDefaultBoard("map5");
+
+        assertEquals(Set.of(1, 5), board.getTile(6, 10).getPress().getActiveSteps());
+        assertEquals(Set.of(2, 4), board.getTile(4, 7).getPress().getActiveSteps());
     }
 
     @Test
@@ -204,5 +249,123 @@ class BoardLoaderTest {
         assertNotNull(board);
         assertEquals(12, board.getWidth());
         assertEquals(12, board.getHeight());
+    }
+
+    private int countPlainFloorTiles(Board board) {
+        Set<String> laserSources = board.getLasers().stream()
+                .map(laser -> laser.getX() + "," + laser.getY())
+                .collect(java.util.stream.Collectors.toSet());
+
+        int count = 0;
+        for (int y = 0; y < board.getHeight(); y++) {
+            for (int x = 0; x < board.getWidth(); x++) {
+                Tile tile = board.getTile(x, y);
+                boolean emptyFloor = tile.getFieldType() == com.roborally.common.enums.FieldType.FLOOR
+                        && tile.getConveyorBelt() == null
+                        && tile.getGear() == null
+                        && tile.getPusher() == null
+                        && tile.getPress() == null
+                        && tile.getCheckpoint() == null
+                        && !tile.isStart()
+                        && !laserSources.contains(tile.getX() + "," + tile.getY());
+                if (emptyFloor) {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    private int countBelts(Board board, boolean express, boolean curve, boolean crossing) {
+        int count = 0;
+        for (int y = 0; y < board.getHeight(); y++) {
+            for (int x = 0; x < board.getWidth(); x++) {
+                Tile tile = board.getTile(x, y);
+                ConveyorBelt belt = tile.getConveyorBelt();
+                if (belt == null) {
+                    continue;
+                }
+                boolean matches = belt.isExpress() == express
+                        && belt.isCrossing() == crossing
+                        && (belt.getCurveRotation() != null) == curve
+                        && !(curve && crossing);
+                if (matches) {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    private int countCheckpoints(Board board) {
+        int count = 0;
+        for (int y = 0; y < board.getHeight(); y++) {
+            for (int x = 0; x < board.getWidth(); x++) {
+                if (board.getTile(x, y).getCheckpoint() != null) {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    private int countRepairs(Board board) {
+        int count = 0;
+        for (int y = 0; y < board.getHeight(); y++) {
+            for (int x = 0; x < board.getWidth(); x++) {
+                if (board.getTile(x, y).isRepair()) {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    private int countPits(Board board) {
+        int count = 0;
+        for (int y = 0; y < board.getHeight(); y++) {
+            for (int x = 0; x < board.getWidth(); x++) {
+                if (board.getTile(x, y).isPit()) {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    private int countGears(Board board) {
+        int count = 0;
+        for (int y = 0; y < board.getHeight(); y++) {
+            for (int x = 0; x < board.getWidth(); x++) {
+                if (board.getTile(x, y).getGear() != null) {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    private int countPresses(Board board) {
+        int count = 0;
+        for (int y = 0; y < board.getHeight(); y++) {
+            for (int x = 0; x < board.getWidth(); x++) {
+                if (board.getTile(x, y).getPress() != null) {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    private int countPushers(Board board) {
+        int count = 0;
+        for (int y = 0; y < board.getHeight(); y++) {
+            for (int x = 0; x < board.getWidth(); x++) {
+                if (board.getTile(x, y).getPusher() != null) {
+                    count++;
+                }
+            }
+        }
+        return count;
     }
 }

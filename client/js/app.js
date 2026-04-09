@@ -536,7 +536,8 @@ const App = (() => {
             if (curveRotation) {
                 const curveMap = { LEFT: 'LEFT_', RIGHT: 'RIGHT_' };
                 const cDir = curveMap[curveRotation];
-                layers.push(`/assets/fields/${pre}CURVE_${cDir}${dir}.png`);
+                const curveAssetDir = dir === 'LEFT' ? 'RIGHT' : dir === 'RIGHT' ? 'LEFT' : dir;
+                layers.push(`/assets/fields/${pre}CURVE_${cDir}${curveAssetDir}.png`);
             } else if (t.conveyorBelt.crossing) {
                 const crossingType = (t.conveyorBelt.crossingType || 'LEFTRIGHT').toUpperCase();
                 const fallback = `/assets/fields/${pre}CROSSING_LEFTRIGHT_${dir}.png`;
@@ -556,10 +557,20 @@ const App = (() => {
             layers.push(t.gear.rotation === 'CLOCKWISE' ? '/assets/fields/CLOCKWISE_TURN_TOP.png' : '/assets/fields/COUNTER_CLOCKWISE_TURN_TOP.png');
         }
         if (t.pusher) {
-            layers.push(`/assets/fields/PUSHER_1_CONTRACTED_${dirMap[t.pusher.direction] || 'TOP'}.png`);
+            const steps = Array.isArray(t.pusher.steps) ? [...t.pusher.steps].sort((a, b) => a - b) : [];
+            const pusherVariant = steps.join(',') === '1' ? '1'
+                : steps.join(',') === '2' ? '2'
+                : steps.join(',') === '3' ? '3'
+                : steps.join(',') === '2,4' ? '24'
+                : '135';
+            layers.push(`/assets/fields/PUSHER_${pusherVariant}_CONTRACTED_${dirMap[t.pusher.direction] || 'TOP'}.png`);
         }
         if (t.press) {
-            layers.push('/assets/fields/PRESS_OPEN_TOP.png');
+            const steps = Array.isArray(t.press.steps) ? [...t.press.steps].sort((a, b) => a - b) : [];
+            const pressVariant = steps.join(',') === '2,4' ? '24'
+                : steps.join(',') === '3' ? '3'
+                : '15';
+            layers.push(`/assets/fields/PRESS_${pressVariant}_OPEN.png`);
         }
         if (t.checkpoint) {
             let num = Math.min(t.checkpoint.number, 6);
@@ -630,8 +641,12 @@ const App = (() => {
         for (const laser of lasers) {
             const dirMap = { NORTH: 'TOP', SOUTH: 'BOTTOM', EAST: 'RIGHT', WEST: 'LEFT' };
             const dir = dirMap[laser.direction] || 'TOP';
-            const laserAsset = laser.strength === 3 ? `TRIPLE_LASER_SOURCE_${dir}.png` :
-                               laser.strength === 2 ? `DOUBLE_LASER_SOURCE_${dir}.png` : `LASER_SOURCE_${dir}.png`;
+            const sourceDir = dir === 'TOP' ? 'BOTTOM'
+                : dir === 'BOTTOM' ? 'TOP'
+                : dir === 'LEFT' ? 'RIGHT'
+                : 'LEFT';
+            const laserAsset = laser.strength === 3 ? `TRIPLE_LASER_SOURCE_${sourceDir}.png` :
+                               laser.strength === 2 ? `DOUBLE_LASER_SOURCE_${sourceDir}.png` : `LASER_SOURCE_${sourceDir}.png`;
             const img = getAsset('/assets/fields/' + laserAsset);
             let px = laser.x * TILE_SIZE;
             let py = laser.y * TILE_SIZE;

@@ -303,27 +303,57 @@ public class MovementService {
             }
         }
 
-        // Technically we execute belt moves together so chains don't get messy, but moving one step mostly works.
+        // Legacy belts move first, then the destination tile may rotate the robot depending on
+        // the connection between the source belt and the destination belt.
         for (Robot r : movements.keySet()) {
             if (r.isDestroyed()) continue;
-            com.roborally.server.model.ConveyorBelt belt = movements.get(r);
+            com.roborally.server.model.ConveyorBelt sourceBelt = movements.get(r);
             int prevX = r.getX();
             int prevY = r.getY();
             Direction prevDir = r.getDirection();
-            
-            boolean moved = moveOneStep(game, r, belt.getDirection());
+
+            boolean moved = moveOneStep(game, r, sourceBelt.getDirection());
             if (moved) {
                 Tile newTile = board.getTile(r.getX(), r.getY());
-                if (newTile != null && newTile.getConveyorBelt() != null) {
-                    com.roborally.common.enums.RotationDirection rot = newTile.getConveyorBelt().getCurveRotation();
-                    if (rot == com.roborally.common.enums.RotationDirection.CLOCKWISE) {
-                        r.setDirection(r.getDirection().rotateClockwise());
-                    } else if (rot == com.roborally.common.enums.RotationDirection.COUNTERCLOCKWISE) {
-                        r.setDirection(r.getDirection().rotateCounterClockwise());
-                    }
-                }
+                applyLegacyBeltTurn(r, sourceBelt, newTile);
                 recordResult("BELT", r, 0, prevX, prevY, prevDir, results);
             }
+        }
+    }
+
+    private void applyLegacyBeltTurn(Robot robot, com.roborally.server.model.ConveyorBelt sourceBelt, Tile destinationTile) {
+        if (destinationTile == null || destinationTile.getConveyorBelt() == null) {
+            return;
+        }
+
+        com.roborally.server.model.ConveyorBelt destinationBelt = destinationTile.getConveyorBelt();
+        Direction baseDirection = destinationBelt.getDirection();
+        Direction incomingDirection = sourceBelt.getDirection();
+
+        com.roborally.common.enums.RotationDirection curveRotation = destinationBelt.getCurveRotation();
+        if (curveRotation != null && incomingDirection == baseDirection) {
+            if (curveRotation == com.roborally.common.enums.RotationDirection.CLOCKWISE) {
+                robot.setDirection(robot.getDirection().rotateClockwise());
+            } else {
+                robot.setDirection(robot.getDirection().rotateCounterClockwise());
+            }
+            return;
+        }
+
+        if (!destinationBelt.isCrossing()) {
+            return;
+        }
+
+        String crossingType = destinationBelt.getCrossingType() == null
+                ? "LEFTRIGHT"
+                : destinationBelt.getCrossingType().toUpperCase(Locale.ROOT);
+
+        if ((crossingType.equals("LEFT") || crossingType.equals("LEFTRIGHT"))
+                && incomingDirection == baseDirection.rotateClockwise()) {
+            robot.setDirection(robot.getDirection().rotateCounterClockwise());
+        } else if ((crossingType.equals("RIGHT") || crossingType.equals("LEFTRIGHT"))
+                && incomingDirection == baseDirection.rotateCounterClockwise()) {
+            robot.setDirection(robot.getDirection().rotateClockwise());
         }
     }
 
