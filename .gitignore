@@ -24,6 +24,8 @@ desktop.ini
 *.ear
 hs_err_pid*
 
+!gradle/wrapper/gradle-wrapper.jar
+
 # H2 Database
 *.mv.db
 *.trace.db
