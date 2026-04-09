@@ -303,8 +303,10 @@ public class MovementService {
             }
         }
 
-        // Legacy belts move first, then the destination tile may rotate the robot depending on
-        // the connection between the source belt and the destination belt.
+        // Legacy boards store curve directions as the incoming/straight-through side, not
+        // the literal outgoing move direction. A curve therefore needs one extra turn when the
+        // robot starts its movement on that tile, and the destination tile may rotate the robot
+        // again depending on how the two belts connect.
         for (Robot r : movements.keySet()) {
             if (r.isDestroyed()) continue;
             com.roborally.server.model.ConveyorBelt sourceBelt = movements.get(r);
@@ -312,13 +314,23 @@ public class MovementService {
             int prevY = r.getY();
             Direction prevDir = r.getDirection();
 
-            boolean moved = moveOneStep(game, r, sourceBelt.getDirection());
+            boolean moved = moveOneStep(game, r, resolveLegacyBeltMoveDirection(sourceBelt));
             if (moved) {
                 Tile newTile = board.getTile(r.getX(), r.getY());
                 applyLegacyBeltTurn(r, sourceBelt, newTile);
                 recordResult("BELT", r, 0, prevX, prevY, prevDir, results);
             }
         }
+    }
+
+    private Direction resolveLegacyBeltMoveDirection(com.roborally.server.model.ConveyorBelt belt) {
+        com.roborally.common.enums.RotationDirection curveRotation = belt.getCurveRotation();
+        if (curveRotation == null) {
+            return belt.getDirection();
+        }
+        return curveRotation == com.roborally.common.enums.RotationDirection.CLOCKWISE
+                ? belt.getDirection().rotateClockwise()
+                : belt.getDirection().rotateCounterClockwise();
     }
 
     private void applyLegacyBeltTurn(Robot robot, com.roborally.server.model.ConveyorBelt sourceBelt, Tile destinationTile) {
