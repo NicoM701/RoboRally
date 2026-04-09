@@ -61,6 +61,8 @@ public class LobbyService {
         if (maxPlayers <= 2) initialBoard = "map1";
         else if (maxPlayers <= 4) initialBoard = "map3";
         lobby.getGameSettings().put("boardName", initialBoard);
+        Board initialBoardState = boardLoader.loadBoard(initialBoard);
+        lobby.getGameSettings().put("checkpoints", sanitizeCheckpointSetting(null, initialBoardState));
 
         lobbies.put(lobbyId, lobby);
         userLobbyMap.put(hostUserId, lobbyId);
@@ -234,19 +236,48 @@ public class LobbyService {
 
         // Merge settings
         if (settings != null) {
-            String targetBoard = (String) lobby.getGameSettings().getOrDefault("boardName", "map1");
-            if (settings.containsKey("boardName")) {
-                targetBoard = (String) settings.get("boardName");
-            }
+            Map<String, Object> mergedSettings = new LinkedHashMap<>(lobby.getGameSettings());
+            mergedSettings.putAll(settings);
+
+            String targetBoard = normalizeBoardName(mergedSettings.get("boardName"));
             Board board = boardLoader.loadBoard(targetBoard);
             if (board.getStartPositions().size() < lobby.getMaxPlayers()) {
                 throw new IllegalArgumentException("Dieses Spielbrett unterstützt nur " + board.getStartPositions().size() + " Spieler. Aktuelle Max-Spieler: " + lobby.getMaxPlayers());
             }
 
-            lobby.getGameSettings().putAll(settings);
+            mergedSettings.put("boardName", targetBoard);
+            mergedSettings.put("checkpoints", sanitizeCheckpointSetting(mergedSettings.get("checkpoints"), board));
+
+            lobby.getGameSettings().putAll(mergedSettings);
         }
 
         broadcastLobbyUpdate(lobby);
+    }
+
+    private String normalizeBoardName(Object boardName) {
+        if (boardName instanceof String rawName && !rawName.trim().isEmpty()) {
+            return rawName.trim();
+        }
+        return "map1";
+    }
+
+    private int sanitizeCheckpointSetting(Object requestedValue, Board board) {
+        int boardCheckpoints = board.getTotalCheckpoints();
+        if (boardCheckpoints <= 0) {
+            return 0;
+        }
+
+        int minCheckpoints = Math.min(2, boardCheckpoints);
+        if (!(requestedValue instanceof Number number)) {
+            return boardCheckpoints;
+        }
+
+        int requestedCheckpoints = number.intValue();
+        if (requestedCheckpoints < minCheckpoints) {
+            return minCheckpoints;
+        }
+
+        return Math.min(requestedCheckpoints, boardCheckpoints);
     }
 
     // ─── Close / Cleanup ────────────────────────────────

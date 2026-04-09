@@ -69,15 +69,18 @@ public class GameService {
 
         // Get settings
         Map<String, Object> settings = lobby.getGameSettings();
-        String boardName = (String) settings.getOrDefault("boardName", "Map 1");
-        int checkpoints = (int) settings.getOrDefault("checkpoints", 3);
+        String boardName = (String) settings.getOrDefault("boardName", "map1");
         boolean timerEnabled = Boolean.TRUE.equals(settings.get("timerEnabled"));
 
         // Create game state
         GameState game = new GameState(lobbyId);
         Board board = boardLoader.loadBoard(boardName);
+        int checkpoints = resolveCheckpointCount(settings.get("checkpoints"), board);
         if (checkpoints > 0 && checkpoints != board.getTotalCheckpoints()) {
             board.setTotalCheckpoints(checkpoints);
+        }
+        if (checkpoints > 0) {
+            lobby.getGameSettings().put("checkpoints", checkpoints);
         }
         game.setBoard(board);
 
@@ -116,6 +119,25 @@ public class GameService {
         startDealPhase(game, timerEnabled);
 
         return game;
+    }
+
+    private int resolveCheckpointCount(Object configuredValue, Board board) {
+        int boardCheckpoints = board.getTotalCheckpoints();
+        if (boardCheckpoints <= 0) {
+            return 0;
+        }
+
+        int minCheckpoints = Math.min(2, boardCheckpoints);
+        if (!(configuredValue instanceof Number number)) {
+            return boardCheckpoints;
+        }
+
+        int requestedCheckpoints = number.intValue();
+        if (requestedCheckpoints < minCheckpoints) {
+            return minCheckpoints;
+        }
+
+        return Math.min(requestedCheckpoints, boardCheckpoints);
     }
 
     /**

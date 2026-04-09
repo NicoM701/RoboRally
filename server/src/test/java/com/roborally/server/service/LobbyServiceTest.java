@@ -75,6 +75,15 @@ class LobbyServiceTest {
     }
 
     @Test
+    @DisplayName("Create: default checkpoints follow the selected board")
+    void createLobby_setsDefaultCheckpointsForBoard() {
+        Lobby lobby = lobbyService.createLobby(hostId, "Duo", null, 2);
+
+        assertEquals("map1", lobby.getGameSettings().get("boardName"));
+        assertEquals(2, lobby.getGameSettings().get("checkpoints"));
+    }
+
+    @Test
     @DisplayName("Create: empty name → exception")
     void createLobby_emptyName_throws() {
         assertThrows(IllegalArgumentException.class, () -> lobbyService.createLobby(hostId, "", null, 4));
@@ -253,7 +262,18 @@ class LobbyServiceTest {
         lobbyService.updateGameSettings(hostId, Map.of("boardName", "Plan C"));
 
         assertEquals("Plan C", lobby.getGameSettings().get("boardName"));
+        assertEquals(2, lobby.getGameSettings().get("checkpoints"));
         assertTrue((Boolean) lobby.getGameSettings().get("timerEnabled")); // default unchanged
+    }
+
+    @Test
+    @DisplayName("Update game settings: checkpoint count is clamped to the board")
+    void updateGameSettings_clampsCheckpointCount() {
+        Lobby lobby = lobbyService.createLobby(hostId, "Test", null, 2);
+
+        lobbyService.updateGameSettings(hostId, Map.of("checkpoints", 5));
+
+        assertEquals(2, lobby.getGameSettings().get("checkpoints"));
     }
 
     // ─── Lobby List ─────────────────────────────────────

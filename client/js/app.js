@@ -6,6 +6,7 @@ const App = (() => {
     // ─── State ──────────────────────────────────────────
     let currentUser = null;   // { userId, username, isGuest }
     let currentScreen = 'login';
+    let currentLobby = null;
     let availableBoards = [];
 
     // ─── Initialization ─────────────────────────────────
@@ -233,6 +234,7 @@ const App = (() => {
 
     function bindLobbyEvents() {
         document.getElementById('btn-leave-lobby').addEventListener('click', () => {
+            currentLobby = null;
             RoboSocket.send('LEAVE_LOBBY', {});
             showScreen('menu');
         });
@@ -247,12 +249,21 @@ const App = (() => {
 
         document.getElementById('game-board-select').addEventListener('change', (e) => {
             const boardName = e.target.value;
+            const checkpoints = syncCheckpointSelect(boardName);
             renderMapPreview(boardName);
-            RoboSocket.send('UPDATE_GAME_SETTINGS', { settings: { boardName } });
+            const settings = { boardName };
+            if (checkpoints !== null) {
+                settings.checkpoints = checkpoints;
+            }
+            RoboSocket.send('UPDATE_GAME_SETTINGS', { settings });
         });
 
         document.getElementById('game-checkpoints').addEventListener('change', (e) => {
-            RoboSocket.send('UPDATE_GAME_SETTINGS', { settings: { checkpoints: parseInt(e.target.value) } });
+            const boardName = document.getElementById('game-board-select').value;
+            const checkpoints = syncCheckpointSelect(boardName, e.target.value);
+            if (checkpoints !== null) {
+                RoboSocket.send('UPDATE_GAME_SETTINGS', { settings: { checkpoints } });
+            }
         });
     }
 
@@ -349,13 +360,15 @@ const App = (() => {
         });
 
         RoboSocket.on('LOBBY_UPDATE', (data) => {
-            renderLobbyRoom(data.lobby || data);
+            currentLobby = data.lobby || data;
+            renderLobbyRoom(currentLobby);
             if (currentScreen === 'menu') {
                 showScreen('lobby');
             }
         });
 
         RoboSocket.on('LOBBY_CLOSED', () => {
+            currentLobby = null;
             showScreen('menu');
             toast('Lobby wurde geschlossen.', 'info');
             RoboSocket.send('REQUEST_LOBBY_LIST', {});
@@ -622,6 +635,9 @@ const App = (() => {
             const beamAssetSuffix = isHorizontal ? (laser.strength > 1 ? 'HORIZONTAL.png' : 'HorizontalLaserOverlay.png') :
                                                    (laser.strength > 1 ? 'VERTICAL.png' : 'VerticalLaserOverlay.png');
             const beamImg = getAsset(`/assets/overlays/${beamAssetPrefix}${beamAssetSuffix}`);
+            const targetDirOpposite = laser.direction === 'NORTH' ? 'SOUTH' :
+                                      laser.direction === 'SOUTH' ? 'NORTH' :
+                                      laser.direction === 'EAST' ? 'WEST' : 'EAST';
 
             let blocked = false;
             while (!blocked) {
@@ -631,13 +647,22 @@ const App = (() => {
                     break;
                 }
 
-                cx += dx;
-                cy += dy;
+                const nextX = cx + dx;
+                const nextY = cy + dy;
 
-                if (cx < 0 || cy < 0 || cx >= boardWidth || cy >= boardHeight) {
+                if (nextX < 0 || nextY < 0 || nextX >= boardWidth || nextY >= boardHeight) {
                     blocked = true;
                     break;
                 }
+
+                const targetTile = tileLookup.get(`${nextX},${nextY}`);
+                if (targetTile && targetTile.walls && targetTile.walls.includes(targetDirOpposite)) {
+                    blocked = true;
+                    break;
+                }
+
+                cx = nextX;
+                cy = nextY;
 
                 if (beamImg) {
                     ctx.drawImage(beamImg, cx * tileSize, cy * tileSize, tileSize, tileSize);
@@ -647,18 +672,45 @@ const App = (() => {
                     blocked = true;
                     break;
                 }
-
-                const targetDirOpposite = laser.direction === 'NORTH' ? 'SOUTH' :
-                                          laser.direction === 'SOUTH' ? 'NORTH' :
-                                          laser.direction === 'EAST' ? 'WEST' : 'EAST';
-
-                const targetTile = tileLookup.get(`${cx},${cy}`);
-                if (targetTile && targetTile.walls && targetTile.walls.includes(targetDirOpposite)) {
-                    blocked = true;
-                    break;
-                }
             }
         }
+    }
+
+    function getBoardInfo(boardName) {
+        return availableBoards.find(board => board.id === boardName) || null;
+    }
+
+    function syncCheckpointSelect(boardName, desiredValue) {
+        const checkpointSelect = document.getElementById('game-checkpoints');
+        if (!checkpointSelect) return null;
+
+        const boardInfo = getBoardInfo(boardName);
+        if (!boardInfo) {
+            return null;
+        }
+
+        const maxCheckpoints = Math.max(0, Number(boardInfo.boardData?.totalCheckpoints) || 0);
+        if (maxCheckpoints === 0) {
+            checkpointSelect.innerHTML = '';
+            checkpointSelect.disabled = true;
+            return 0;
+        }
+
+        const minCheckpoints = Math.min(2, maxCheckpoints);
+        const numericValue = Number.parseInt(desiredValue ?? checkpointSelect.value, 10);
+        const selectedCheckpoints = Number.isFinite(numericValue) ? numericValue : maxCheckpoints;
+        const clampedCheckpoints = Math.min(maxCheckpoints, Math.max(minCheckpoints, selectedCheckpoints));
+
+        checkpointSelect.innerHTML = '';
+        for (let value = minCheckpoints; value <= maxCheckpoints; value++) {
+            const option = document.createElement('option');
+            option.value = String(value);
+            option.textContent = String(value);
+            checkpointSelect.appendChild(option);
+        }
+
+        checkpointSelect.value = String(clampedCheckpoints);
+        return clampedCheckpoints;
     }
 
     function getRobotImagePath(robot) {
@@ -830,6 +882,7 @@ const App = (() => {
     }
 
     function renderLobbyRoom(lobby) {
+        currentLobby = lobby;
         document.getElementById('lobby-room-name').textContent = lobby.name || 'Lobby';
 
         // Players
@@ -876,11 +929,12 @@ const App = (() => {
         const currentBoard = lobby.gameSettings?.boardName || 'map1';
         if (boardSelect) {
             boardSelect.value = currentBoard;
-            renderMapPreview(currentBoard);
         }
-        if (checkpointSelect && lobby.gameSettings?.checkpoints) {
+        const checkpoints = syncCheckpointSelect(currentBoard, lobby.gameSettings?.checkpoints);
+        if (checkpointSelect && checkpoints === null && lobby.gameSettings?.checkpoints) {
             checkpointSelect.value = lobby.gameSettings.checkpoints;
         }
+        renderMapPreview(currentBoard);
     }
 
     function renderEndScreen(data) {
@@ -900,19 +954,25 @@ const App = (() => {
     function updateMapSelects() {
         const select = document.getElementById('game-board-select');
         if (!select) return;
-        const currentVal = select.value;
+        const currentVal = currentLobby?.gameSettings?.boardName || select.value;
         select.innerHTML = availableBoards.map(b => `<option value="${b.id}">${b.name} (Max: ${b.maxPlayers})</option>`).join('');
         if (availableBoards.some(b => b.id === currentVal)) {
             select.value = currentVal;
         }
-        renderMapPreview();
+
+        const checkpoints = syncCheckpointSelect(select.value, currentLobby?.gameSettings?.checkpoints);
+        if (currentLobby && checkpoints !== null) {
+            currentLobby.gameSettings = currentLobby.gameSettings || {};
+            currentLobby.gameSettings.checkpoints = checkpoints;
+        }
+        renderMapPreview(select.value);
     }
 
     function renderMapPreview(boardName) {
         const select = document.getElementById('game-board-select');
         if (!select) return;
         boardName = boardName || select.value;
-        const boardInfo = availableBoards.find(b => b.id === boardName);
+        const boardInfo = getBoardInfo(boardName);
         if (!boardInfo) return;
 
         const info = document.getElementById('map-preview-info');

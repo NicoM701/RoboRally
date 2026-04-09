@@ -114,13 +114,50 @@ class GameServiceTest {
     }
 
     @Test
-    void startGame_customCheckpoints_setsOnBoard() {
+    void startGame_missingCheckpoints_defaultsToBoardTotal() {
+        when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
+        Board board = new Board("test", 12, 12);
+        board.addStartPosition(1, 11);
+        board.addStartPosition(2, 11);
+        board.setTotalCheckpoints(2);
+        when(boardLoader.loadBoard(anyString())).thenReturn(board);
+        when(cardService.createDeck()).thenReturn(createMockDeck());
+        lenient().when(userService.getSessionIdByUserId(anyLong())).thenReturn(null);
+        lenient().when(movementService.executeStep(any(), anyInt())).thenReturn(List.of());
+        when(cardService.deal(any(), any(), any())).thenReturn(createMockHand());
+
+        GameState game = gameService.startGame(1L);
+        assertEquals(2, game.getBoard().getTotalCheckpoints());
+        assertEquals(2, lobby.getGameSettings().get("checkpoints"));
+    }
+
+    @Test
+    void startGame_excessiveCheckpoints_clampsToBoardTotal() {
         lobby.getGameSettings().put("checkpoints", 5);
         when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
         Board board = new Board("test", 12, 12);
         board.addStartPosition(1, 11);
         board.addStartPosition(2, 11);
-        board.setTotalCheckpoints(3);
+        board.setTotalCheckpoints(2);
+        when(boardLoader.loadBoard(anyString())).thenReturn(board);
+        when(cardService.createDeck()).thenReturn(createMockDeck());
+        lenient().when(userService.getSessionIdByUserId(anyLong())).thenReturn(null);
+        lenient().when(movementService.executeStep(any(), anyInt())).thenReturn(List.of());
+        when(cardService.deal(any(), any(), any())).thenReturn(createMockHand());
+
+        GameState game = gameService.startGame(1L);
+        assertEquals(2, game.getBoard().getTotalCheckpoints());
+        assertEquals(2, lobby.getGameSettings().get("checkpoints"));
+    }
+
+    @Test
+    void startGame_validCustomCheckpointsBelowBoardTotal_setsOnBoard() {
+        lobby.getGameSettings().put("checkpoints", 5);
+        when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
+        Board board = new Board("test", 12, 12);
+        board.addStartPosition(1, 11);
+        board.addStartPosition(2, 11);
+        board.setTotalCheckpoints(6);
         when(boardLoader.loadBoard(anyString())).thenReturn(board);
         when(cardService.createDeck()).thenReturn(createMockDeck());
         lenient().when(userService.getSessionIdByUserId(anyLong())).thenReturn(null);
