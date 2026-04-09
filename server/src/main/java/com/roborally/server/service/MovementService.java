@@ -314,10 +314,11 @@ public class MovementService {
             int prevY = r.getY();
             Direction prevDir = r.getDirection();
 
-            boolean moved = moveOneStep(game, r, resolveLegacyBeltMoveDirection(sourceBelt));
+            Direction travelDirection = resolveLegacyBeltMoveDirection(sourceBelt);
+            boolean moved = moveOneStep(game, r, travelDirection);
             if (moved) {
                 Tile newTile = board.getTile(r.getX(), r.getY());
-                applyLegacyBeltTurn(r, sourceBelt, newTile);
+                applyLegacyBeltTurn(r, travelDirection, newTile);
                 recordResult("BELT", r, 0, prevX, prevY, prevDir, results);
             }
         }
@@ -333,14 +334,13 @@ public class MovementService {
                 : belt.getDirection().rotateCounterClockwise();
     }
 
-    private void applyLegacyBeltTurn(Robot robot, com.roborally.server.model.ConveyorBelt sourceBelt, Tile destinationTile) {
+    private void applyLegacyBeltTurn(Robot robot, Direction incomingDirection, Tile destinationTile) {
         if (destinationTile == null || destinationTile.getConveyorBelt() == null) {
             return;
         }
 
         com.roborally.server.model.ConveyorBelt destinationBelt = destinationTile.getConveyorBelt();
         Direction baseDirection = destinationBelt.getDirection();
-        Direction incomingDirection = sourceBelt.getDirection();
 
         com.roborally.common.enums.RotationDirection curveRotation = destinationBelt.getCurveRotation();
         if (curveRotation != null && incomingDirection == baseDirection) {

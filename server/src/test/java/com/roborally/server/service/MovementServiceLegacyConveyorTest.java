@@ -65,6 +65,93 @@ class MovementServiceLegacyConveyorTest {
     }
 
     @Test
+    void curveToCurve_destinationTurnUsesTravelDirection() {
+        Board board = emptyBoard();
+
+        ConveyorBelt sourceCurve = new ConveyorBelt(Direction.EAST, false);
+        sourceCurve.setCurveRotation(RotationDirection.COUNTERCLOCKWISE);
+        board.getTile(5, 5).setConveyorBelt(sourceCurve);
+
+        ConveyorBelt destinationCurve = new ConveyorBelt(Direction.NORTH, false);
+        destinationCurve.setCurveRotation(RotationDirection.COUNTERCLOCKWISE);
+        board.getTile(5, 4).setConveyorBelt(destinationCurve);
+
+        GameState game = new GameState("synthetic-curve-to-curve");
+        game.setBoard(board);
+        Robot robot = new Robot(1L, 0, 5, 5, Direction.NORTH);
+        game.addRobot(1L, robot);
+
+        movementService.executeStep(game, 0);
+
+        assertEquals(5, robot.getX());
+        assertEquals(4, robot.getY());
+        assertEquals(Direction.WEST, robot.getDirection(),
+                "Destination curves must evaluate the actual travel direction from the source curve");
+
+        movementService.executeStep(game, 1);
+
+        assertEquals(4, robot.getX());
+        assertEquals(4, robot.getY());
+        assertEquals(Direction.WEST, robot.getDirection());
+    }
+
+    @Test
+    void curveToCrossing_destinationTurnUsesTravelDirection() {
+        Board board = emptyBoard();
+
+        ConveyorBelt sourceCurve = new ConveyorBelt(Direction.EAST, false);
+        sourceCurve.setCurveRotation(RotationDirection.COUNTERCLOCKWISE);
+        board.getTile(5, 5).setConveyorBelt(sourceCurve);
+
+        ConveyorBelt crossing = new ConveyorBelt(Direction.WEST, false);
+        crossing.setCrossingType("LEFT");
+        board.getTile(5, 4).setConveyorBelt(crossing);
+
+        GameState game = new GameState("synthetic-curve-to-crossing");
+        game.setBoard(board);
+        Robot robot = new Robot(1L, 0, 5, 5, Direction.NORTH);
+        game.addRobot(1L, robot);
+
+        movementService.executeStep(game, 0);
+
+        assertEquals(5, robot.getX());
+        assertEquals(4, robot.getY());
+        assertEquals(Direction.WEST, robot.getDirection(),
+                "Destination crossings must evaluate the actual travel direction from the source curve");
+
+        movementService.executeStep(game, 1);
+
+        assertEquals(4, robot.getX());
+        assertEquals(4, robot.getY());
+        assertEquals(Direction.WEST, robot.getDirection());
+    }
+
+    @Test
+    void expressCurveToCrossing_chainUsesTravelDirectionDuringSameStep() {
+        Board board = emptyBoard();
+
+        ConveyorBelt sourceCurve = new ConveyorBelt(Direction.EAST, true);
+        sourceCurve.setCurveRotation(RotationDirection.COUNTERCLOCKWISE);
+        board.getTile(5, 5).setConveyorBelt(sourceCurve);
+
+        ConveyorBelt crossing = new ConveyorBelt(Direction.WEST, true);
+        crossing.setCrossingType("LEFT");
+        board.getTile(5, 4).setConveyorBelt(crossing);
+
+        GameState game = new GameState("synthetic-express-curve-to-crossing");
+        game.setBoard(board);
+        Robot robot = new Robot(1L, 0, 5, 5, Direction.NORTH);
+        game.addRobot(1L, robot);
+
+        movementService.executeStep(game, 0);
+
+        assertEquals(4, robot.getX());
+        assertEquals(4, robot.getY());
+        assertEquals(Direction.WEST, robot.getDirection(),
+                "Express chains must keep using the actual source travel direction for destination turns");
+    }
+
+    @Test
     void crossing_turnMatchesLegacyDestinationRules() {
         Board board = emptyBoard();
         board.getTile(5, 5).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false));
