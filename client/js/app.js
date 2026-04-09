@@ -18,6 +18,7 @@ const App = (() => {
         bindChatEvents();
         bindSettingsEvents();
         bindServerMessages();
+        startGameUiLoop();
 
         RoboSocket.connect();
     }
@@ -137,6 +138,7 @@ const App = (() => {
         document.getElementById('btn-logout').addEventListener('click', () => {
             RoboSocket.send('LOGOUT', {});
             currentUser = null;
+            resetGamePresentation();
             showScreen('login');
             // Clear login fields
             document.getElementById('login-username').value = '';
@@ -235,6 +237,7 @@ const App = (() => {
     function bindLobbyEvents() {
         document.getElementById('btn-leave-lobby').addEventListener('click', () => {
             currentLobby = null;
+            resetGamePresentation();
             RoboSocket.send('LEAVE_LOBBY', {});
             showScreen('menu');
         });
@@ -348,6 +351,7 @@ const App = (() => {
 
         RoboSocket.on('USER_DELETED', () => {
             currentUser = null;
+            resetGamePresentation();
             showScreen('login');
             document.getElementById('modal-settings').classList.add('hidden');
             clearSettingsForm();
@@ -369,6 +373,7 @@ const App = (() => {
 
         RoboSocket.on('LOBBY_CLOSED', () => {
             currentLobby = null;
+            resetGamePresentation();
             showScreen('menu');
             toast('Lobby wurde geschlossen.', 'info');
             RoboSocket.send('REQUEST_LOBBY_LIST', {});
@@ -394,36 +399,60 @@ const App = (() => {
             } else {
                 Object.assign(gameState, data);
             }
+
+            if (!programmingState.totalPlayers && gameState.robots) {
+                programmingState.totalPlayers = gameState.robots.filter(robot => !robot.destroyed).length;
+            }
+
+            if (data.phase === 'PROGRAMMING') {
+                applyProgrammingUpdate({ phase: 'PROGRAMMING' });
+            }
+
             showScreen('game');
             renderBoard();
             renderGameInfo();
         });
 
         RoboSocket.on('CARDS_DEALT', (data) => {
-            dealtCards = data.cards || [];
-            selectedCards = [];
-            blockedSlots = data.blockedSlots || 0;
-            renderCardHand();
-            toast(`Runde ${data.round}: ${dealtCards.length} Karten erhalten!`, 'info');
+            if (executionPlayback.isPlaying || executionPlayback.queue.length > 0) {
+                executionPlayback.pendingCards = data;
+                bufferProgrammingUpdate({ ...data, phase: 'PROGRAMMING', status: 'started' });
+                return;
+            }
+
+            applyDealtCards(data);
         });
 
         RoboSocket.on('PROGRAMMING_PHASE_START', (data) => {
             if (data.status === 'submitted') {
+                programmingState.isSubmitted = true;
                 toast(data.message || 'Programm eingereicht!', 'success');
+                return;
+            }
+
+            if (executionPlayback.isPlaying || executionPlayback.queue.length > 0) {
+                bufferProgrammingUpdate(data);
+                return;
+            }
+
+            applyProgrammingUpdate(data);
+            if (data.submittedUsername && data.submittedPlayerId !== currentUser?.userId) {
+                pushGameEvent(`${data.submittedUsername} hat sein Programm eingerastet.`, 'programming');
+                renderGameInfo();
             }
         });
 
         RoboSocket.on('EXECUTION_STEP', (data) => {
-            if (data.robots) {
-                gameState.robots = data.robots;
-                renderBoard();
-            }
-            toast(`Schritt ${data.step} ausgeführt`, 'info');
+            queueExecutionStep(data);
         });
 
         RoboSocket.on('GAME_OVER', (data) => {
-            showScreen('end');
-            renderEndScreen(data);
+            if (executionPlayback.isPlaying || executionPlayback.queue.length > 0) {
+                executionPlayback.pendingGameOver = data;
+                return;
+            }
+
+            showGameOver(data);
         });
 
         // Errors
@@ -459,14 +488,36 @@ const App = (() => {
     let dealtCards = [];
     let selectedCards = [];
     let blockedSlots = 0;
+    let submittedProgramPreview = [];
+    let gameEventLog = [];
+    let programmingState = createProgrammingState();
+    let executionPlayback = createExecutionPlaybackState();
+    let gameUiLoop = null;
 
     const TILE_SIZE = 48;
-    const ROBOT_COLORS = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c', '#e67e22', '#34495e'];
+    const ROBOT_COLORS = ['#3498db', '#2ecc71', '#95a5a6', '#e67e22', '#ff66cc', '#9b59b6', '#e74c3c', '#f1c40f'];
+    const ROBOT_LABELS = ['Blau', 'Grün', 'Grau', 'Orange', 'Pink', 'Lila', 'Rot', 'Gelb'];
     const TILE_COLORS = {
         FLOOR: '#3d4f5f',
         PIT: '#0d0d0d',
         START: '#4a6741',
         WALL: '#c0c0c0'
+    };
+    const PHASE_LABELS = {
+        WAITING: 'Bereitmachen',
+        DEALING_CARDS: 'Karten werden verteilt',
+        PROGRAMMING: 'Programmieren',
+        EXECUTING: 'Ausführung',
+        ROUND_CLEANUP: 'Aufräumen',
+        GAME_OVER: 'Spiel vorbei'
+    };
+    const PHASE_COPY = {
+        WAITING: 'Noch einen Moment. Die Fabrik wird vorbereitet.',
+        DEALING_CARDS: 'Neue Hand kommt rein. Gleich geht’s wieder los.',
+        PROGRAMMING: 'Wähle jetzt 5 Register in der Reihenfolge aus, in der dein Roboter sie fahren soll.',
+        EXECUTING: 'Die Register werden nacheinander abgespielt. Jetzt lieber schauen als hektisch klicken.',
+        ROUND_CLEANUP: 'Die Runde wird gerade abgeschlossen.',
+        GAME_OVER: 'Die Fabrik hat gesprochen.'
     };
 
     const ASSETS = {};
@@ -724,6 +775,317 @@ const App = (() => {
         MOVE_1: '↑1', MOVE_2: '↑2', MOVE_3: '↑3',
         BACKUP: '↓', TURN_LEFT: '↶', TURN_RIGHT: '↷', U_TURN: '↩'
     };
+    const CARD_LABELS = {
+        MOVE_1: 'Vor 1',
+        MOVE_2: 'Vor 2',
+        MOVE_3: 'Vor 3',
+        BACKUP: 'Rückwärts',
+        TURN_LEFT: 'Links drehen',
+        TURN_RIGHT: 'Rechts drehen',
+        U_TURN: 'Wenden'
+    };
+
+    function createProgrammingState() {
+        return {
+            enabled: false,
+            totalSeconds: 60,
+            deadlineEpochMs: null,
+            submittedCount: 0,
+            totalPlayers: 0,
+            isSubmitted: false
+        };
+    }
+
+    function createExecutionPlaybackState() {
+        return {
+            queue: [],
+            isPlaying: false,
+            round: null,
+            currentStep: 0,
+            currentSummary: '',
+            pendingCards: null,
+            pendingProgrammingUpdate: null,
+            pendingGameOver: null
+        };
+    }
+
+    function startGameUiLoop() {
+        if (gameUiLoop) return;
+        gameUiLoop = window.setInterval(() => {
+            if (currentScreen !== 'game' || !gameState) return;
+            if (getDisplayedPhase() === 'PROGRAMMING' || executionPlayback.isPlaying) {
+                renderGameInfo();
+            }
+        }, 250);
+    }
+
+    function resetGamePresentation() {
+        gameState = null;
+        dealtCards = [];
+        selectedCards = [];
+        blockedSlots = 0;
+        submittedProgramPreview = [];
+        gameEventLog = [];
+        programmingState = createProgrammingState();
+        executionPlayback = createExecutionPlaybackState();
+    }
+
+    function getPlayerName(playerId) {
+        const player = currentLobby?.players?.find(entry => entry.userId === playerId);
+        return player?.username || `Spieler ${playerId}`;
+    }
+
+    function getRobotLabel(robot) {
+        return `${ROBOT_LABELS[robot.robotIndex % ROBOT_LABELS.length]}-Roboter`;
+    }
+
+    function getRobotAccent(robot) {
+        return ROBOT_COLORS[robot.robotIndex % ROBOT_COLORS.length];
+    }
+
+    function getLocalRobot() {
+        if (!currentUser || !gameState?.robots) return null;
+        return gameState.robots.find(robot => robot.playerId === currentUser.userId) || null;
+    }
+
+    function pushGameEvent(text, tone = 'info') {
+        if (!text) return;
+        gameEventLog.unshift({ text, tone, id: `${Date.now()}-${Math.random()}` });
+        gameEventLog = gameEventLog.slice(0, 8);
+    }
+
+    function getDisplayedPhase() {
+        if (executionPlayback.isPlaying || executionPlayback.queue.length > 0) {
+            return 'EXECUTING';
+        }
+        return gameState?.phase || 'WAITING';
+    }
+
+    function getDisplayedRound() {
+        if (executionPlayback.isPlaying && executionPlayback.round) {
+            return executionPlayback.round;
+        }
+        return gameState?.round || 1;
+    }
+
+    function getPhaseLabel(phase) {
+        return PHASE_LABELS[phase] || phase || 'Unbekannt';
+    }
+
+    function getPhaseCopy(phase) {
+        if (phase === 'PROGRAMMING' && programmingState.isSubmitted) {
+            return 'Dein Programm sitzt. Jetzt können die anderen fertig planen oder der Timer läuft aus.';
+        }
+        if (phase === 'EXECUTING' && executionPlayback.currentSummary) {
+            return executionPlayback.currentSummary;
+        }
+        return PHASE_COPY[phase] || 'Die Fabrik läuft.';
+    }
+
+    function getProgrammingRemainingMs() {
+        if (!programmingState.enabled || !programmingState.deadlineEpochMs) return 0;
+        return Math.max(0, programmingState.deadlineEpochMs - Date.now());
+    }
+
+    function getProgrammingProgressPercent() {
+        if (!programmingState.enabled || !programmingState.totalSeconds) return 100;
+        const remainingRatio = getProgrammingRemainingMs() / (programmingState.totalSeconds * 1000);
+        return Math.max(0, Math.min(100, remainingRatio * 100));
+    }
+
+    function formatCountdown(ms) {
+        const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+        return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+
+    function applyProgrammingUpdate(data = {}) {
+        if ('timerEnabled' in data) {
+            programmingState.enabled = Boolean(data.timerEnabled);
+            if (!programmingState.enabled) {
+                programmingState.deadlineEpochMs = null;
+            }
+        }
+
+        const timerSeconds = Number(data.timerSeconds);
+        if (Number.isFinite(timerSeconds) && timerSeconds > 0) {
+            programmingState.totalSeconds = timerSeconds;
+        }
+
+        const deadlineEpochMs = Number(data.deadlineEpochMs);
+        if (Number.isFinite(deadlineEpochMs) && deadlineEpochMs > 0) {
+            programmingState.deadlineEpochMs = deadlineEpochMs;
+        }
+
+        const submittedCount = Number(data.submittedCount);
+        if (Number.isFinite(submittedCount)) {
+            programmingState.submittedCount = submittedCount;
+        }
+
+        const totalPlayers = Number(data.totalPlayers);
+        if (Number.isFinite(totalPlayers) && totalPlayers >= 0) {
+            programmingState.totalPlayers = totalPlayers;
+        } else if (!programmingState.totalPlayers && gameState?.robots) {
+            programmingState.totalPlayers = gameState.robots.filter(robot => !robot.destroyed).length;
+        }
+
+        if ((data.phase === 'PROGRAMMING' || data.status === 'started') && !('submittedPlayerId' in data)) {
+            programmingState.isSubmitted = false;
+        }
+        if (data.status === 'submitted') {
+            programmingState.isSubmitted = true;
+        }
+    }
+
+    function applyDealtCards(data, { silent = false } = {}) {
+        dealtCards = data.cards || [];
+        selectedCards = [];
+        blockedSlots = data.blockedSlots || 0;
+        submittedProgramPreview = [];
+        applyProgrammingUpdate({ ...data, phase: 'PROGRAMMING', status: 'started' });
+        renderCardHand();
+        renderGameInfo();
+        if (!silent) {
+            pushGameEvent(`Runde ${data.round}: ${dealtCards.length} Karten eingetroffen. Jetzt programmieren.`, 'programming');
+            toast(`Runde ${data.round}: ${dealtCards.length} Karten erhalten!`, 'info');
+        }
+    }
+
+    function bufferProgrammingUpdate(data) {
+        executionPlayback.pendingProgrammingUpdate = {
+            ...(executionPlayback.pendingProgrammingUpdate || {}),
+            ...data
+        };
+    }
+
+    function summarizeExecutionStep(stepData) {
+        const results = stepData.results || [];
+        if (!results.length) {
+            return 'Keine sichtbaren Bewegungen in diesem Register.';
+        }
+
+        const counts = results.reduce((acc, result) => {
+            const key = result.cardType || 'UNKNOWN';
+            acc[key] = (acc[key] || 0) + 1;
+            return acc;
+        }, {});
+
+        const localAction = currentUser
+            ? results.find(result => result.playerId === currentUser.userId && CARD_LABELS[result.cardType])
+            : null;
+
+        const parts = [];
+        if (localAction) {
+            parts.push(`Du: ${CARD_LABELS[localAction.cardType]}`);
+        }
+
+        const boardEffects = [
+            ['BELT', 'Förderband'],
+            ['PUSHER', 'Schieber'],
+            ['GEAR', 'Zahnrad'],
+            ['BOARD_LASER', 'Board-Laser'],
+            ['ROBOT_LASER', 'Roboter-Laser']
+        ];
+
+        for (const [key, label] of boardEffects) {
+            if (counts[key]) {
+                parts.push(`${counts[key]}× ${label}`);
+            }
+        }
+
+        const moveCards = Object.keys(CARD_LABELS)
+            .filter(key => counts[key])
+            .slice(0, localAction ? 2 : 3)
+            .map(key => `${counts[key]}× ${CARD_LABELS[key]}`);
+        if (moveCards.length && !localAction) {
+            parts.push(moveCards.join(', '));
+        }
+
+        return parts.join(' • ') || `${results.length} Aktionen`;
+    }
+
+    function getExecutionStepDelay(stepData) {
+        const resultCount = stepData.results?.length || 0;
+        return resultCount > 8 ? 1500 : 1150;
+    }
+
+    function queueExecutionStep(data) {
+        executionPlayback.queue.push({
+            ...data,
+            round: data.round || executionPlayback.round || gameState?.round || 1,
+            summary: summarizeExecutionStep(data)
+        });
+
+        if (!executionPlayback.isPlaying) {
+            executionPlayback.isPlaying = true;
+            executionPlayback.round = data.round || gameState?.round || 1;
+            executionPlayback.currentStep = 0;
+            executionPlayback.currentSummary = 'Die Fabrik löst deine Register der Reihe nach auf.';
+            dealtCards = [];
+            selectedCards = [];
+            renderCardHand();
+            pushGameEvent(`Ausführung gestartet. Die Register werden jetzt gut lesbar abgespielt.`, 'exec');
+            processExecutionQueue();
+        }
+    }
+
+    function processExecutionQueue() {
+        if (!executionPlayback.queue.length) {
+            finishExecutionPlayback();
+            return;
+        }
+
+        const nextStep = executionPlayback.queue.shift();
+        executionPlayback.isPlaying = true;
+        executionPlayback.round = nextStep.round || executionPlayback.round || 1;
+        executionPlayback.currentStep = nextStep.step || 0;
+        executionPlayback.currentSummary = nextStep.summary;
+
+        if (gameState && nextStep.robots) {
+            gameState.robots = nextStep.robots;
+            gameState.currentStep = nextStep.step || gameState.currentStep;
+        }
+
+        renderBoard();
+        renderGameInfo();
+        pushGameEvent(`Register ${nextStep.step}: ${nextStep.summary}`, 'exec');
+
+        window.setTimeout(processExecutionQueue, getExecutionStepDelay(nextStep));
+    }
+
+    function finishExecutionPlayback() {
+        executionPlayback.isPlaying = false;
+        executionPlayback.currentStep = 0;
+        executionPlayback.currentSummary = '';
+        executionPlayback.round = null;
+
+        const pendingProgrammingUpdate = executionPlayback.pendingProgrammingUpdate;
+        const pendingCards = executionPlayback.pendingCards;
+        const pendingGameOver = executionPlayback.pendingGameOver;
+
+        executionPlayback.pendingProgrammingUpdate = null;
+        executionPlayback.pendingCards = null;
+        executionPlayback.pendingGameOver = null;
+
+        if (pendingProgrammingUpdate) {
+            applyProgrammingUpdate(pendingProgrammingUpdate);
+        }
+        if (pendingCards) {
+            applyDealtCards(pendingCards);
+        } else {
+            renderGameInfo();
+        }
+
+        if (pendingGameOver) {
+            showGameOver(pendingGameOver);
+        }
+    }
+
+    function showGameOver(data) {
+        showScreen('end');
+        renderEndScreen(data);
+    }
 
     function renderBoard() {
         const canvas = document.getElementById('game-board-canvas');
@@ -766,19 +1128,44 @@ const App = (() => {
 
         const robots = gameState.robots || [];
         drawBoardLasers(ctx, board, tiles, robots, TILE_SIZE);
+        const localPlayerId = currentUser?.userId;
 
         for (const robot of robots) {
             if (robot.destroyed) continue;
             const rx = robot.x * TILE_SIZE;
             const ry = robot.y * TILE_SIZE;
+            const isLocalRobot = localPlayerId === robot.playerId;
+
+            if (isLocalRobot) {
+                ctx.save();
+                ctx.fillStyle = 'rgba(6, 214, 160, 0.18)';
+                ctx.strokeStyle = '#06d6a0';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.arc(rx + TILE_SIZE / 2, ry + TILE_SIZE / 2, TILE_SIZE * 0.4, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+                ctx.restore();
+            }
+
             const img = getAsset(getRobotImagePath(robot));
             if (img) {
                 ctx.drawImage(img, rx, ry, TILE_SIZE, TILE_SIZE);
             } else {
-                ctx.fillStyle = ROBOT_COLORS[robot.robotIndex % ROBOT_COLORS.length];
+                ctx.fillStyle = getRobotAccent(robot);
                 ctx.beginPath();
                 ctx.arc(rx + TILE_SIZE/2, ry + TILE_SIZE/2, TILE_SIZE/3, 0, Math.PI * 2);
                 ctx.fill();
+            }
+
+            if (isLocalRobot) {
+                ctx.save();
+                ctx.fillStyle = '#06d6a0';
+                ctx.fillRect(rx + 4, ry + 4, 22, 14);
+                ctx.fillStyle = '#0a0e17';
+                ctx.font = '700 10px Inter, sans-serif';
+                ctx.fillText('DU', rx + 8, ry + 14);
+                ctx.restore();
             }
         }
     }
@@ -788,16 +1175,86 @@ const App = (() => {
         if (!panel || !gameState) return;
 
         const robots = gameState.robots || [];
-        let html = `<div class="game-phase-indicator"><strong>Phase:</strong> ${gameState.phase || '—'} | <strong>Runde:</strong> ${gameState.round || 1}</div>`;
-        html += '<div class="robot-status-list">';
+        const localRobot = getLocalRobot();
+        const phase = getDisplayedPhase();
+        const round = getDisplayedRound();
+        const remainingMs = getProgrammingRemainingMs();
+        const timerPercent = getProgrammingProgressPercent();
+        const timerTone = remainingMs <= 10000 ? 'danger' : remainingMs <= 20000 ? 'warning' : '';
+        const submittedText = programmingState.totalPlayers
+            ? `${programmingState.submittedCount}/${programmingState.totalPlayers} eingereicht`
+            : 'Status folgt';
+
+        let html = '<div class="game-command-center">';
+        html += `<div class="phase-hero phase-${phase.toLowerCase()}">
+            <div class="phase-badge">Runde ${round}</div>
+            <div class="phase-title-row">
+                <h3>${getPhaseLabel(phase)}</h3>
+                ${phase === 'EXECUTING' && executionPlayback.currentStep ? `<span class="register-pill">Register ${executionPlayback.currentStep}/5</span>` : ''}
+            </div>
+            <p class="phase-copy">${escapeHtml(getPhaseCopy(phase))}</p>
+            <div class="phase-meta">
+                <span>${phase === 'PROGRAMMING' ? submittedText : `Roboter aktiv: ${robots.filter(robot => !robot.destroyed).length}`}</span>
+                <span>${localRobot ? `${escapeHtml(getPlayerName(localRobot.playerId))} steuert ${escapeHtml(getRobotLabel(localRobot))}` : 'Roboter wird gesucht'}</span>
+            </div>
+            ${phase === 'PROGRAMMING' ? `
+                <div class="timer-panel ${timerTone}">
+                    <div class="timer-row">
+                        <span>Programmierung</span>
+                        <strong>${programmingState.enabled ? formatCountdown(remainingMs) : 'Kein Timer'}</strong>
+                    </div>
+                    <div class="timer-track"><div class="timer-fill ${timerTone}" style="width:${timerPercent}%"></div></div>
+                </div>
+            ` : ''}
+        </div>`;
+
+        html += `<div class="game-section pilot-card ${localRobot ? '' : 'empty'}">
+            <div class="section-kicker">DEIN ROBOTER</div>
+            ${localRobot ? `
+                <div class="pilot-header">
+                    <span class="pilot-chip" style="--pilot-accent:${getRobotAccent(localRobot)}">DU</span>
+                    <div>
+                        <strong>${escapeHtml(getPlayerName(localRobot.playerId))}</strong>
+                        <div class="pilot-subtitle">${escapeHtml(getRobotLabel(localRobot))}</div>
+                    </div>
+                </div>
+                <div class="pilot-metrics">
+                    <span>📍 ${localRobot.x + 1}/${localRobot.y + 1}</span>
+                    <span>❤️ ${localRobot.lives}</span>
+                    <span>💥 ${localRobot.damage}</span>
+                    <span>🏁 CP ${Math.max(0, localRobot.nextCheckpoint - 1)}</span>
+                </div>
+            ` : '<p>Dein Roboter ist noch nicht im Spiel sichtbar.</p>'}
+        </div>`;
+
+        html += '<div class="game-section"><div class="section-kicker">ROSTER</div><div class="robot-status-list">';
         for (const r of robots) {
-            const color = ROBOT_COLORS[r.robotIndex % ROBOT_COLORS.length];
-            html += `<div class="robot-status" style="border-left: 4px solid ${color}">
-                <span class="robot-name">Spieler ${r.playerId}</span>
-                <span>❤️ ${r.lives} | 💥 ${r.damage} | 🏁 CP${r.nextCheckpoint - 1}${r.destroyed ? ' | ☠️' : ''}</span>
+            const color = getRobotAccent(r);
+            const isLocalRobot = currentUser?.userId === r.playerId;
+            html += `<div class="robot-status ${isLocalRobot ? 'you' : ''}" style="--robot-accent:${color}">
+                <div class="robot-status-main">
+                    <span class="robot-swatch"></span>
+                    <div>
+                        <span class="robot-name">${escapeHtml(getPlayerName(r.playerId))}</span>
+                        <div class="robot-status-sub">${escapeHtml(getRobotLabel(r))}${isLocalRobot ? ' • DU' : ''}</div>
+                    </div>
+                </div>
+                <span class="robot-status-meta">❤️ ${r.lives} · 💥 ${r.damage} · 🏁 ${Math.max(0, r.nextCheckpoint - 1)}${r.destroyed ? ' · ☠️' : ''}</span>
             </div>`;
         }
-        html += '</div>';
+        html += '</div></div>';
+
+        html += '<div class="game-section"><div class="section-kicker">EINSATZPROTOKOLL</div><div class="event-log">';
+        if (gameEventLog.length === 0) {
+            html += '<div class="event-item empty">Noch keine Meldungen. Sobald es kracht, landet es hier.</div>';
+        } else {
+            html += gameEventLog.map(event => `
+                <div class="event-item ${event.tone}">
+                    <span class="event-pill ${event.tone}">${event.tone === 'exec' ? 'EXEC' : event.tone === 'programming' ? 'PLAN' : 'INFO'}</span>
+                    <span>${escapeHtml(event.text)}</span>
+                </div>`).join('');
+        }
+        html += '</div></div></div>';
         panel.innerHTML = html;
     }
 
@@ -806,7 +1263,34 @@ const App = (() => {
         if (!panel) return;
 
         const needed = 5 - blockedSlots;
+        if (!dealtCards.length) {
+            const previewCards = submittedProgramPreview.length
+                ? `<div class="program-plan">${submittedProgramPreview.map((card, index) => `
+                    <div class="program-slot-preview">
+                        <span class="slot-index">${index + 1}</span>
+                        <span>${CARD_ICONS[card.type] || '?'}</span>
+                        <small>${escapeHtml(card.displayName)}</small>
+                    </div>`).join('')}</div>`
+                : '';
+
+            panel.innerHTML = `
+                <h3>🎴 Programmierung</h3>
+                <div class="card-hand-empty">
+                    <strong>${executionPlayback.isPlaying ? 'Ausführung läuft' : programmingState.isSubmitted ? 'Programm eingeloggt' : 'Warte auf die nächste Hand'}</strong>
+                    <p>${executionPlayback.isPlaying
+                        ? 'Die Register werden gerade Schritt für Schritt abgespielt.'
+                        : programmingState.isSubmitted
+                            ? 'Deine Auswahl ist gesichert. Jetzt die Show genießen.'
+                            : 'Sobald die nächste Runde startet, tauchen hier wieder deine Karten auf.'}</p>
+                    ${previewCards}
+                </div>`;
+            return;
+        }
+
         let html = `<h3>🎴 Deine Karten <small>(${selectedCards.length}/${needed} gewählt)</small></h3>`;
+        if (blockedSlots > 0) {
+            html += `<div class="programming-summary">${blockedSlots} Register sind durch Schaden blockiert und bleiben aus der Vorrunde liegen.</div>`;
+        }
         html += '<div class="card-hand">';
         for (const card of dealtCards) {
             const isSelected = selectedCards.includes(card.id);
@@ -821,6 +1305,18 @@ const App = (() => {
             </div>`;
         }
         html += '</div>';
+
+        if (selectedCards.length) {
+            const chosenCards = selectedCards
+                .map(cardId => dealtCards.find(card => card.id === cardId))
+                .filter(Boolean);
+            html += `<div class="program-plan">${chosenCards.map((card, index) => `
+                <div class="program-slot-preview">
+                    <span class="slot-index">${index + 1}</span>
+                    <span>${CARD_ICONS[card.type] || '?'}</span>
+                    <small>${escapeHtml(card.displayName)}</small>
+                </div>`).join('')}</div>`;
+        }
 
         if (selectedCards.length === needed) {
             html += '<button class="btn btn-primary btn-submit-program" onclick="App.submitProgram()">✅ Programm einreichen</button>';
@@ -845,10 +1341,17 @@ const App = (() => {
             toast('Wähle erst die richtige Anzahl Karten!', 'error');
             return;
         }
+        submittedProgramPreview = selectedCards
+            .map(cardId => dealtCards.find(card => card.id === cardId))
+            .filter(Boolean);
+        programmingState.isSubmitted = true;
+        programmingState.submittedCount = Math.min(programmingState.totalPlayers || Infinity, programmingState.submittedCount + 1);
+        pushGameEvent('Programm abgeschickt. Jetzt abwarten, ob der Rest schnell genug ist.', 'programming');
         RoboSocket.send('SUBMIT_PROGRAM', { cardIds: selectedCards });
         dealtCards = [];
         selectedCards = [];
         renderCardHand();
+        renderGameInfo();
     }
 
     // ═══════════════════════════════════════════════════
@@ -893,6 +1396,7 @@ const App = (() => {
             if (p.isHost) badges += '<span class="player-badge host">HOST</span>';
             if (p.isBot) badges += '<span class="player-badge bot">BOT</span>';
             if (p.isGuest) badges += '<span class="player-badge guest">GAST</span>';
+            if (currentUser && p.userId === currentUser.userId) badges += '<span class="player-badge you">DU</span>';
 
             return `
                 <div class="player-item" data-user-id="${p.userId}">

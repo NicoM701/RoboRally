@@ -3,6 +3,8 @@ package com.roborally.server.service;
 import com.roborally.common.enums.CardType;
 import com.roborally.common.enums.Direction;
 import com.roborally.common.enums.GamePhase;
+import com.roborally.common.enums.MessageType;
+import com.roborally.common.protocol.Message;
 import com.roborally.server.model.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -395,6 +397,87 @@ class GameServiceTest {
         GameState game = gameService.startGame(1L);
         assertNotNull(game);
         assertEquals(GamePhase.PROGRAMMING, game.getPhase());
+    }
+
+    @Test
+    void startGame_usesConfiguredTimerSecondsInProgrammingMessages() {
+        lobby.getGameSettings().put("timerEnabled", true);
+        lobby.getGameSettings().put("timerSeconds", 75);
+        when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
+        when(lobbyService.getLobbyById(lobby.getId())).thenReturn(lobby);
+        Board board = new Board("test", 12, 12);
+        board.addStartPosition(1, 11);
+        board.addStartPosition(2, 11);
+        board.setTotalCheckpoints(3);
+        when(boardLoader.loadBoard(anyString())).thenReturn(board);
+        when(cardService.createDeck()).thenReturn(createMockDeck());
+        when(cardService.deal(any(), any(), any())).thenReturn(createMockHand());
+        when(userService.getSessionIdByUserId(1L)).thenReturn("session-1");
+        when(userService.getSessionIdByUserId(2L)).thenReturn("session-2");
+        lenient().when(movementService.executeStep(any(), anyInt())).thenReturn(List.of());
+
+        gameService.startGame(1L);
+
+        ArgumentCaptor<Message> messageCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(sessionManager, atLeastOnce()).sendToSession(anyString(), messageCaptor.capture());
+
+        Message cardsDealt = messageCaptor.getAllValues().stream()
+                .filter(message -> message.getType() == MessageType.CARDS_DEALT)
+                .findFirst()
+                .orElseThrow();
+        Message phaseStart = messageCaptor.getAllValues().stream()
+                .filter(message -> message.getType() == MessageType.PROGRAMMING_PHASE_START)
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(75, cardsDealt.get("timerSeconds"));
+        assertTrue((Boolean) cardsDealt.get("timerEnabled"));
+        assertNotNull(cardsDealt.get("deadlineEpochMs"));
+        assertEquals(75, phaseStart.get("timerSeconds"));
+        assertEquals(0, phaseStart.get("submittedCount"));
+        assertEquals(2, phaseStart.get("totalPlayers"));
+    }
+
+    @Test
+    void submitProgram_broadcastsProgrammingProgressToOtherPlayers() {
+        GameState game = startTestGame();
+        List<ProgramCard> hand = createMockHand();
+        game.getPlayerHands().put(1L, hand);
+        when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
+        when(lobbyService.getLobbyById(lobby.getId())).thenReturn(lobby);
+        when(cardService.validateProgram(any(), any(), any(), anyInt())).thenReturn(null);
+        when(userService.getSessionIdByUserId(1L)).thenReturn("session-1");
+        when(userService.getSessionIdByUserId(2L)).thenReturn("session-2");
+        User alice = new User("Alice", "a@example.com", "hash", false);
+        alice.setId(1L);
+        User bob = new User("Bob", "b@example.com", "hash", false);
+        bob.setId(2L);
+        when(userService.getUserById(1L)).thenReturn(Optional.of(alice));
+        when(userService.getUserById(2L)).thenReturn(Optional.of(bob));
+
+        gameService.submitProgram(1L, List.of(1, 2, 3, 4, 5));
+
+        ArgumentCaptor<Message> sessionOneCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(sessionManager, atLeastOnce()).sendToSession(eq("session-1"), sessionOneCaptor.capture());
+        Message selfAck = sessionOneCaptor.getAllValues().stream()
+                .filter(message -> message.getType() == MessageType.PROGRAMMING_PHASE_START)
+                .filter(message -> "submitted".equals(message.get("status")))
+                .findFirst()
+                .orElseThrow();
+
+        ArgumentCaptor<Message> sessionTwoCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(sessionManager, atLeastOnce()).sendToSession(eq("session-2"), sessionTwoCaptor.capture());
+        Message teamProgress = sessionTwoCaptor.getAllValues().stream()
+                .filter(message -> message.getType() == MessageType.PROGRAMMING_PHASE_START)
+                .filter(message -> "progress".equals(message.get("status")))
+                .reduce((first, second) -> second)
+                .orElseThrow();
+
+        assertEquals("submitted", selfAck.get("status"));
+        assertEquals(1, teamProgress.get("submittedCount"));
+        assertEquals(2, teamProgress.get("totalPlayers"));
+        assertEquals(1L, teamProgress.get("submittedPlayerId"));
+        assertEquals("Alice", teamProgress.get("submittedUsername"));
     }
 
     @Test
