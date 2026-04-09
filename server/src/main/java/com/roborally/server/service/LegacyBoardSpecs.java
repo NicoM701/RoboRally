@@ -858,7 +858,8 @@ final class LegacyBoardSpecs {
             conveyor(0, 5, LegacyOrientation.RIGHT, false),
             curve(1, 5, LegacyOrientation.RIGHT, 2, false),
             pit(2, 5),
-            wall(3, 5, LegacyOrientation.RIGHT),
+            // Legacy Board.java set a RIGHT wall on the default tile and then overwrote
+            // that tile with this curve field, so the wall never existed in the original board/PNG.
             curve(3, 5, LegacyOrientation.BOTTOM, 1, false),
             wall(3, 5, LegacyOrientation.LEFT),
             curve(4, 5, LegacyOrientation.RIGHT, 2, false),

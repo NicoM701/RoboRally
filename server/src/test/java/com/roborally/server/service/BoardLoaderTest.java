@@ -228,6 +228,19 @@ class BoardLoaderTest {
     }
 
     @Test
+    @DisplayName("Map6: overwritten legacy wall does not survive the translated curve tile")
+    void map6_overwrittenLegacyWallDoesNotSurviveTranslation() {
+        Board board = boardLoader.createDefaultBoard("map6");
+        Tile curveTile = board.getTile(3, 6);
+
+        assertNotNull(curveTile.getConveyorBelt());
+        assertEquals(Direction.SOUTH, curveTile.getConveyorBelt().getDirection());
+        assertTrue(curveTile.hasWall(Direction.WEST));
+        assertFalse(curveTile.hasWall(Direction.EAST));
+        assertFalse(board.getTile(4, 6).hasWall(Direction.WEST));
+    }
+
+    @Test
     @DisplayName("Default board: serializes to a board payload")
     void defaultBoard_toMap() {
         Board board = boardLoader.createDefaultBoard("Test");

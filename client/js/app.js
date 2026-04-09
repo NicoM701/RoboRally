@@ -584,6 +584,83 @@ const App = (() => {
         return layers;
     }
 
+    function getBoardTileLookup(tiles) {
+        return new Map((tiles || []).map(tile => [`${tile.x},${tile.y}`, tile]));
+    }
+
+    function drawBoardLasers(ctx, board, tiles, robots = [], tileSize = TILE_SIZE) {
+        const lasers = board.lasers || [];
+        if (lasers.length === 0) return;
+
+        const boardWidth = board.width || 12;
+        const boardHeight = board.height || 12;
+        const dirMap = { NORTH: 'TOP', SOUTH: 'BOTTOM', EAST: 'RIGHT', WEST: 'LEFT' };
+        const tileLookup = getBoardTileLookup(tiles);
+        const robotPositions = new Set((robots || [])
+            .filter(robot => !robot.destroyed)
+            .map(robot => `${robot.x},${robot.y}`));
+
+        for (const laser of lasers) {
+            const dir = dirMap[laser.direction] || 'TOP';
+            const sourceDir = dir === 'TOP' ? 'BOTTOM'
+                : dir === 'BOTTOM' ? 'TOP'
+                : dir === 'LEFT' ? 'RIGHT'
+                : 'LEFT';
+            const laserAsset = laser.strength === 3 ? `TRIPLE_LASER_SOURCE_${sourceDir}.png` :
+                               laser.strength === 2 ? `DOUBLE_LASER_SOURCE_${sourceDir}.png` : `LASER_SOURCE_${sourceDir}.png`;
+            const img = getAsset('/assets/fields/' + laserAsset);
+            if (img) ctx.drawImage(img, laser.x * tileSize, laser.y * tileSize, tileSize, tileSize);
+
+            let cx = laser.x;
+            let cy = laser.y;
+            const dx = laser.direction === 'EAST' ? 1 : laser.direction === 'WEST' ? -1 : 0;
+            const dy = laser.direction === 'SOUTH' ? 1 : laser.direction === 'NORTH' ? -1 : 0;
+            const isHorizontal = dx !== 0;
+
+            const beamAssetPrefix = laser.strength === 3 ? 'TRIPLE_LASER_OVERLAY_' :
+                                    laser.strength === 2 ? 'DOUBLE_LASER_OVERLAY_' : '';
+            const beamAssetSuffix = isHorizontal ? (laser.strength > 1 ? 'HORIZONTAL.png' : 'HorizontalLaserOverlay.png') :
+                                                   (laser.strength > 1 ? 'VERTICAL.png' : 'VerticalLaserOverlay.png');
+            const beamImg = getAsset(`/assets/overlays/${beamAssetPrefix}${beamAssetSuffix}`);
+
+            let blocked = false;
+            while (!blocked) {
+                const currentTile = tileLookup.get(`${cx},${cy}`);
+                if (currentTile && currentTile.walls && currentTile.walls.includes(laser.direction)) {
+                    blocked = true;
+                    break;
+                }
+
+                cx += dx;
+                cy += dy;
+
+                if (cx < 0 || cy < 0 || cx >= boardWidth || cy >= boardHeight) {
+                    blocked = true;
+                    break;
+                }
+
+                if (beamImg) {
+                    ctx.drawImage(beamImg, cx * tileSize, cy * tileSize, tileSize, tileSize);
+                }
+
+                if (robotPositions.has(`${cx},${cy}`)) {
+                    blocked = true;
+                    break;
+                }
+
+                const targetDirOpposite = laser.direction === 'NORTH' ? 'SOUTH' :
+                                          laser.direction === 'SOUTH' ? 'NORTH' :
+                                          laser.direction === 'EAST' ? 'WEST' : 'EAST';
+
+                const targetTile = tileLookup.get(`${cx},${cy}`);
+                if (targetTile && targetTile.walls && targetTile.walls.includes(targetDirOpposite)) {
+                    blocked = true;
+                    break;
+                }
+            }
+        }
+    }
+
     function getRobotImagePath(robot) {
         const colors = ['BLUE', 'GREEN', 'GREY', 'ORANGE', 'PINK', 'PURPLE', 'RED', 'YELLOW'];
         const color = colors[robot.robotIndex % colors.length];
@@ -636,73 +713,7 @@ const App = (() => {
         }
 
         const robots = gameState.robots || [];
-
-        const lasers = board.lasers || [];
-        for (const laser of lasers) {
-            const dirMap = { NORTH: 'TOP', SOUTH: 'BOTTOM', EAST: 'RIGHT', WEST: 'LEFT' };
-            const dir = dirMap[laser.direction] || 'TOP';
-            const sourceDir = dir === 'TOP' ? 'BOTTOM'
-                : dir === 'BOTTOM' ? 'TOP'
-                : dir === 'LEFT' ? 'RIGHT'
-                : 'LEFT';
-            const laserAsset = laser.strength === 3 ? `TRIPLE_LASER_SOURCE_${sourceDir}.png` :
-                               laser.strength === 2 ? `DOUBLE_LASER_SOURCE_${sourceDir}.png` : `LASER_SOURCE_${sourceDir}.png`;
-            const img = getAsset('/assets/fields/' + laserAsset);
-            let px = laser.x * TILE_SIZE;
-            let py = laser.y * TILE_SIZE;
-            if (img) ctx.drawImage(img, px, py, TILE_SIZE, TILE_SIZE);
-
-            // Calculate beam trajectory
-            let cx = laser.x;
-            let cy = laser.y;
-            let dx = laser.direction === 'EAST' ? 1 : laser.direction === 'WEST' ? -1 : 0;
-            let dy = laser.direction === 'SOUTH' ? 1 : laser.direction === 'NORTH' ? -1 : 0;
-            let isHorizontal = dx !== 0;
-
-            const beamAssetPrefix = laser.strength === 3 ? 'TRIPLE_LASER_OVERLAY_' :
-                                    laser.strength === 2 ? 'DOUBLE_LASER_OVERLAY_' : '';
-            const beamAssetSuffix = isHorizontal ? (laser.strength > 1 ? 'HORIZONTAL.png' : 'HorizontalLaserOverlay.png') :
-                                                   (laser.strength > 1 ? 'VERTICAL.png' : 'VerticalLaserOverlay.png');
-            const beamAsset = `/assets/overlays/${beamAssetPrefix}${beamAssetSuffix}`;
-            const beamImg = getAsset(beamAsset);
-
-            let blocked = false;
-            while (!blocked) {
-                const currentTile = tiles.find(t => t.x === cx && t.y === cy);
-                if (currentTile && currentTile.walls && currentTile.walls.includes(laser.direction)) {
-                    blocked = true;
-                    break;
-                }
-
-                cx += dx;
-                cy += dy;
-
-                if (cx < 0 || cy < 0 || cx >= board.width || cy >= board.height) {
-                    blocked = true;
-                    break;
-                }
-
-                if (beamImg) {
-                    ctx.drawImage(beamImg, cx * TILE_SIZE, cy * TILE_SIZE, TILE_SIZE, TILE_SIZE);
-                }
-
-                const objHit = robots.some(r => r.x === cx && r.y === cy && !r.destroyed);
-                if (objHit) {
-                    blocked = true;
-                    break;
-                }
-
-                const targetDirOpposite = laser.direction === 'NORTH' ? 'SOUTH' :
-                                          laser.direction === 'SOUTH' ? 'NORTH' :
-                                          laser.direction === 'EAST' ? 'WEST' : 'EAST';
-
-                const targetTile = tiles.find(t => t.x === cx && t.y === cy);
-                if (targetTile && targetTile.walls && targetTile.walls.includes(targetDirOpposite)) {
-                    blocked = true;
-                    break;
-                }
-            }
-        }
+        drawBoardLasers(ctx, board, tiles, robots, TILE_SIZE);
 
         for (const robot of robots) {
             if (robot.destroyed) continue;
@@ -945,6 +956,8 @@ const App = (() => {
             }
 
         }
+
+        drawBoardLasers(ctx, board, tiles, [], PREVIEW_TILE_SIZE);
     }
 
     function appendChatMessage(from, text, scope) {
