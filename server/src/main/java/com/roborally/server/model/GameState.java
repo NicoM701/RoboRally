@@ -19,6 +19,7 @@ public class GameState {
     private final List<ProgramCard> discardPile = new ArrayList<>();
     private final Map<Long, List<ProgramCard>> playerHands = new LinkedHashMap<>();
     private final Set<Long> submittedPlayers = new HashSet<>();
+    private volatile boolean active = true;
 
     public GameState(String lobbyId) {
         this.lobbyId = lobbyId;
@@ -123,6 +124,14 @@ public class GameState {
 
     public void clearSubmissions() {
         submittedPlayers.clear();
+    }
+
+    public boolean isActive() {
+        return active;
+    }
+
+    public void deactivate() {
+        this.active = false;
     }
 
     /**

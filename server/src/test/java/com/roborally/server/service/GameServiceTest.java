@@ -5,12 +5,15 @@ import com.roborally.common.enums.Direction;
 import com.roborally.common.enums.GamePhase;
 import com.roborally.server.model.*;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.*;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.*;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -44,6 +47,11 @@ class GameServiceTest {
     void setUp() {
         lobby = new Lobby("lobby-1", "TestLobby", 1L, 4);
         lobby.addPlayer(2L);
+    }
+
+    @AfterEach
+    void tearDown() {
+        gameService.shutdown();
     }
 
     // ═══════════════════════════════════════
@@ -395,6 +403,38 @@ class GameServiceTest {
         GameState game = gameService.startGame(1L);
         assertNotNull(game);
         assertEquals(GamePhase.PROGRAMMING, game.getPhase());
+    }
+
+    @Test
+    void handlePlayerDeparture_activeGame_abortsAndCleansUp() {
+        GameState game = startTestGame();
+        when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
+        when(userService.getSessionIdByUserId(anyLong())).thenReturn("session-1");
+        when(lobbyService.getLobbyById(lobby.getId())).thenReturn(lobby);
+
+        gameService.handlePlayerDeparture(1L);
+
+        assertNull(gameService.getGame(lobby.getId()));
+        assertFalse(game.isActive());
+        assertEquals(Lobby.LobbyStatus.WAITING, lobby.getStatus());
+        assertTrue(game.getPlayerHands().isEmpty());
+        assertTrue(game.getDeck().isEmpty());
+    }
+
+    @Test
+    void shutdown_cleansGamesTimersAndScheduler() {
+        lobby.getGameSettings().put("timerEnabled", true);
+        GameState game = startTestGame();
+
+        gameService.shutdown();
+
+        assertNull(gameService.getGame(lobby.getId()));
+        assertFalse(game.isActive());
+        assertTrue(((Map<?, ?>) ReflectionTestUtils.getField(gameService, "timers")).isEmpty());
+        ScheduledThreadPoolExecutor scheduler =
+                (ScheduledThreadPoolExecutor) ReflectionTestUtils.getField(gameService, "scheduler");
+        assertNotNull(scheduler);
+        assertTrue(scheduler.isShutdown());
     }
 
     @Test

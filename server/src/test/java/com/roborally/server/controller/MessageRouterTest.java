@@ -118,6 +118,7 @@ class MessageRouterTest {
 
         messageRouter.route(session, new Message(MessageType.LOGOUT));
 
+        verify(gameService).handlePlayerDeparture(5L);
         verify(lobbyService).leaveLobby(5L);
         verify(userService).logout("test-session-1");
         verify(sessionManager).sendMessage(eq(session), argThat(m -> m.getType() == MessageType.LOGOUT_SUCCESS));
@@ -171,6 +172,7 @@ class MessageRouterTest {
 
         messageRouter.route(session, new Message(MessageType.LEAVE_LOBBY));
 
+        verify(gameService).handlePlayerDeparture(10L);
         verify(lobbyService).leaveLobby(10L);
     }
 
@@ -218,6 +220,7 @@ class MessageRouterTest {
 
         messageRouter.handleDisconnect(session);
 
+        verify(gameService).handlePlayerDeparture(5L);
         verify(lobbyService).leaveLobby(5L);
         verify(userService).logout("test-session-1");
     }

@@ -98,6 +98,7 @@ public class MessageRouter {
             // Leave lobby if in one
             Long userId = userService.getUserIdBySession(session.getId());
             if (userId != null) {
+                gameService.handlePlayerDeparture(userId);
                 lobbyService.leaveLobby(userId);
             }
             userService.logout(session.getId());
@@ -146,6 +147,7 @@ public class MessageRouter {
     private void handleLogout(WebSocketSession session) {
         Long userId = userService.getUserIdBySession(session.getId());
         if (userId != null) {
+            gameService.handlePlayerDeparture(userId);
             lobbyService.leaveLobby(userId);
         }
         userService.logout(session.getId());
@@ -223,6 +225,7 @@ public class MessageRouter {
         if (userId == null)
             return;
 
+        gameService.handlePlayerDeparture(userId);
         lobbyService.leaveLobby(userId);
     }
 
