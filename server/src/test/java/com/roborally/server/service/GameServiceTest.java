@@ -374,6 +374,35 @@ class GameServiceTest {
         assertTrue(robot.getNextCheckpoint() > game.getBoard().getTotalCheckpoints());
     }
 
+    @Test
+    void submitProgram_gameOverCleansUpActiveGameAndResetsLobbyToWaiting() {
+        GameState game = startTestGame();
+        game.getBoard().setTotalCheckpoints(2);
+
+        Robot winningRobot = game.getRobot(1L);
+        winningRobot.advanceCheckpoint();
+        winningRobot.advanceCheckpoint();
+
+        game.markSubmitted(2L);
+        Robot otherRobot = game.getRobot(2L);
+        for (int i = 0; i < 5; i++) {
+            otherRobot.setSlot(i, new ProgramCard(20 + i, CardType.MOVE_1, 100 + i));
+        }
+
+        game.getPlayerHands().put(1L, createMockHand());
+        when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
+        when(cardService.validateProgram(any(), any(), any(), anyInt())).thenReturn(null);
+        when(userService.getSessionIdByUserId(anyLong())).thenReturn("session-1");
+        when(movementService.executeStep(any(), anyInt())).thenReturn(List.of());
+
+        gameService.submitProgram(1L, List.of(1, 2, 3, 4, 5));
+
+        assertEquals(Lobby.LobbyStatus.WAITING, lobby.getStatus());
+        assertNull(gameService.getGame(lobby.getId()));
+        verify(sessionManager, atLeastOnce()).sendToSession(eq("session-1"), argThat(message ->
+                message.getType() == com.roborally.common.enums.MessageType.GAME_OVER));
+    }
+
     // ═══════════════════════════════════════
     // Timer behavior
     // ═══════════════════════════════════════

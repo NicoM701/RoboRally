@@ -200,6 +200,19 @@ class LobbyServiceTest {
         assertNull(lobbyService.getLobbyById(lobbyId));
     }
 
+    @Test
+    @DisplayName("Leave: player can create a new lobby immediately afterwards")
+    void leaveLobby_allowsImmediateNewLobby() {
+        lobbyService.createLobby(hostId, "First", null, 4);
+
+        lobbyService.leaveLobby(hostId);
+        Lobby newLobby = lobbyService.createLobby(hostId, "Second", null, 4);
+
+        assertNotNull(newLobby);
+        assertEquals("Second", newLobby.getName());
+        assertEquals(newLobby.getId(), lobbyService.getLobbyIdByUserId(hostId));
+    }
+
     // ─── Kick Player ────────────────────────────────────
 
     @Test

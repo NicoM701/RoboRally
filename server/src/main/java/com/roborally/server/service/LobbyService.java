@@ -128,6 +128,7 @@ public class LobbyService {
         }
 
         String username = getUsernameById(userId);
+        String leavingSessionId = userService.getSessionIdByUserId(userId);
         
         synchronized (lobby) {
             lobby.removePlayer(userId);
@@ -135,6 +136,12 @@ public class LobbyService {
         }
 
         log.info("User {} left lobby '{}'", username, lobby.getName());
+
+        if (leavingSessionId != null) {
+            sessionManager.sendMessage(leavingSessionId, Message.of(MessageType.LOBBY_CLOSED, Map.of(
+                    "reason", "Du hast die Lobby verlassen.",
+                    "lobbyId", lobbyId)));
+        }
 
         if (lobby.getPlayerCount() == 0) {
             // Last player left → close lobby
@@ -186,7 +193,8 @@ public class LobbyService {
         String kickedSessionId = userService.getSessionIdByUserId(targetUserId);
         if (kickedSessionId != null) {
             sessionManager.sendMessage(kickedSessionId, Message.of(MessageType.LOBBY_CLOSED, Map.of(
-                    "reason", "Du wurdest aus der Lobby gekickt.")));
+                    "reason", "Du wurdest aus der Lobby gekickt.",
+                    "lobbyId", lobbyId)));
         }
 
         broadcastLobbyUpdate(lobby);
@@ -294,7 +302,7 @@ public class LobbyService {
             userLobbyMap.remove(pid);
         }
 
-        broadcastToLobby(lobby, Message.of(MessageType.LOBBY_CLOSED));
+        broadcastToLobby(lobby, Message.of(MessageType.LOBBY_CLOSED, Map.of("lobbyId", lobbyId)));
         log.info("Lobby '{}' closed", lobby.getName());
         broadcastGlobalLobbyList();
     }

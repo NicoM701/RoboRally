@@ -7,6 +7,7 @@ const App = (() => {
     let currentUser = null;   // { userId, username, isGuest }
     let currentScreen = 'login';
     let currentLobby = null;
+    let exitingLobbyId = null;
     let availableBoards = [];
 
     // ─── Initialization ─────────────────────────────────
@@ -55,6 +56,49 @@ const App = (() => {
     function hideAuthMessage() {
         const el = document.getElementById('auth-message');
         el.className = 'auth-message hidden';
+    }
+
+    function clearRoundState() {
+        dealtCards = [];
+        selectedCards = [];
+        blockedSlots = 0;
+
+        const panel = document.getElementById('game-cards-panel');
+        if (panel) {
+            panel.innerHTML = '';
+        }
+    }
+
+    function resetLobbyAndGameState() {
+        currentLobby = null;
+        gameState = null;
+        clearRoundState();
+
+        const winner = document.getElementById('end-winner');
+        if (winner) {
+            winner.innerHTML = '';
+        }
+    }
+
+    function returnToHomeScreen() {
+        showScreen(currentUser ? 'menu' : 'login');
+    }
+
+    function leaveCurrentLobby({ requestLobbyList = false } = {}) {
+        const lobbyIdToLeave = currentLobby?.id || gameState?.lobbyId;
+        if (lobbyIdToLeave) {
+            exitingLobbyId = lobbyIdToLeave;
+            RoboSocket.send('LEAVE_LOBBY', {});
+        } else {
+            exitingLobbyId = null;
+        }
+
+        resetLobbyAndGameState();
+        returnToHomeScreen();
+
+        if (requestLobbyList && currentUser) {
+            RoboSocket.send('REQUEST_LOBBY_LIST', {});
+        }
     }
 
     // ═══════════════════════════════════════════════════
@@ -137,6 +181,8 @@ const App = (() => {
         document.getElementById('btn-logout').addEventListener('click', () => {
             RoboSocket.send('LOGOUT', {});
             currentUser = null;
+            exitingLobbyId = null;
+            resetLobbyAndGameState();
             showScreen('login');
             // Clear login fields
             document.getElementById('login-username').value = '';
@@ -234,9 +280,7 @@ const App = (() => {
 
     function bindLobbyEvents() {
         document.getElementById('btn-leave-lobby').addEventListener('click', () => {
-            currentLobby = null;
-            RoboSocket.send('LEAVE_LOBBY', {});
-            showScreen('menu');
+            leaveCurrentLobby();
         });
 
         document.getElementById('btn-start-game').addEventListener('click', () => {
@@ -306,6 +350,8 @@ const App = (() => {
     function bindServerMessages() {
         // Auth responses
         RoboSocket.on('LOGIN_SUCCESS', (data) => {
+            exitingLobbyId = null;
+            resetLobbyAndGameState();
             currentUser = {
                 userId: data.userId,
                 username: data.username,
@@ -348,6 +394,8 @@ const App = (() => {
 
         RoboSocket.on('USER_DELETED', () => {
             currentUser = null;
+            exitingLobbyId = null;
+            resetLobbyAndGameState();
             showScreen('login');
             document.getElementById('modal-settings').classList.add('hidden');
             clearSettingsForm();
@@ -360,18 +408,30 @@ const App = (() => {
         });
 
         RoboSocket.on('LOBBY_UPDATE', (data) => {
-            currentLobby = data.lobby || data;
+            const nextLobby = data.lobby || data;
+            if (exitingLobbyId && nextLobby?.id === exitingLobbyId) {
+                return;
+            }
+            exitingLobbyId = null;
+            currentLobby = nextLobby;
             renderLobbyRoom(currentLobby);
             if (currentScreen === 'menu') {
                 showScreen('lobby');
             }
         });
 
-        RoboSocket.on('LOBBY_CLOSED', () => {
-            currentLobby = null;
-            showScreen('menu');
-            toast('Lobby wurde geschlossen.', 'info');
-            RoboSocket.send('REQUEST_LOBBY_LIST', {});
+        RoboSocket.on('LOBBY_CLOSED', (data) => {
+            const closedLobbyId = data?.lobbyId;
+            if (closedLobbyId && currentLobby?.id && currentLobby.id !== closedLobbyId && exitingLobbyId !== closedLobbyId) {
+                return;
+            }
+            exitingLobbyId = null;
+            resetLobbyAndGameState();
+            returnToHomeScreen();
+            if (currentUser) {
+                toast(data?.reason || 'Lobby wurde geschlossen.', 'info');
+                RoboSocket.send('REQUEST_LOBBY_LIST', {});
+            }
         });
 
         RoboSocket.on('PLAYER_JOINED', (data) => {
@@ -389,6 +449,7 @@ const App = (() => {
 
         // Game state
         RoboSocket.on('GAME_STATE', (data) => {
+            exitingLobbyId = null;
             if (!gameState) {
                 gameState = data;
             } else {
@@ -422,6 +483,7 @@ const App = (() => {
         });
 
         RoboSocket.on('GAME_OVER', (data) => {
+            clearRoundState();
             showScreen('end');
             renderEndScreen(data);
         });
@@ -1072,8 +1134,7 @@ const App = (() => {
         const btn = document.getElementById('btn-back-to-menu');
         if (btn) {
             btn.addEventListener('click', () => {
-                showScreen('menu');
-                RoboSocket.send('REQUEST_LOBBY_LIST', {});
+                leaveCurrentLobby();
             });
         }
     });
