@@ -7,6 +7,7 @@ const App = (() => {
     let currentUser = null;   // { userId, username, isGuest }
     let currentScreen = 'login';
     let currentLobby = null;
+    let joiningLobbyId = null;
     let exitingLobbyId = null;
     let availableBoards = [];
 
@@ -86,6 +87,7 @@ const App = (() => {
 
     function leaveCurrentLobby({ requestLobbyList = false } = {}) {
         const lobbyIdToLeave = currentLobby?.id || gameState?.lobbyId;
+        joiningLobbyId = null;
         if (lobbyIdToLeave) {
             exitingLobbyId = lobbyIdToLeave;
             RoboSocket.send('LEAVE_LOBBY', {});
@@ -98,6 +100,44 @@ const App = (() => {
 
         if (requestLobbyList && currentUser) {
             RoboSocket.send('REQUEST_LOBBY_LIST', {});
+        }
+    }
+
+    function getActiveLobbyId() {
+        return currentLobby?.id || gameState?.lobbyId || null;
+    }
+
+    function shouldIgnoreLobbyScopedMessage(lobbyId) {
+        if (!lobbyId) {
+            return false;
+        }
+
+        const activeLobbyId = getActiveLobbyId();
+        if (joiningLobbyId && lobbyId === joiningLobbyId) {
+            return false;
+        }
+        if (exitingLobbyId && lobbyId === exitingLobbyId) {
+            return true;
+        }
+        if (activeLobbyId && lobbyId !== activeLobbyId) {
+            return true;
+        }
+        if (!activeLobbyId && joiningLobbyId && lobbyId !== joiningLobbyId) {
+            return true;
+        }
+
+        return false;
+    }
+
+    function acceptLobbyScopedMessage(lobbyId) {
+        if (!lobbyId) {
+            return;
+        }
+        if (joiningLobbyId === lobbyId) {
+            joiningLobbyId = null;
+        }
+        if (exitingLobbyId === lobbyId) {
+            exitingLobbyId = null;
         }
     }
 
@@ -181,6 +221,7 @@ const App = (() => {
         document.getElementById('btn-logout').addEventListener('click', () => {
             RoboSocket.send('LOGOUT', {});
             currentUser = null;
+            joiningLobbyId = null;
             exitingLobbyId = null;
             resetLobbyAndGameState();
             showScreen('login');
@@ -350,6 +391,7 @@ const App = (() => {
     function bindServerMessages() {
         // Auth responses
         RoboSocket.on('LOGIN_SUCCESS', (data) => {
+            joiningLobbyId = null;
             exitingLobbyId = null;
             resetLobbyAndGameState();
             currentUser = {
@@ -394,6 +436,7 @@ const App = (() => {
 
         RoboSocket.on('USER_DELETED', () => {
             currentUser = null;
+            joiningLobbyId = null;
             exitingLobbyId = null;
             resetLobbyAndGameState();
             showScreen('login');
@@ -409,10 +452,10 @@ const App = (() => {
 
         RoboSocket.on('LOBBY_UPDATE', (data) => {
             const nextLobby = data.lobby || data;
-            if (exitingLobbyId && nextLobby?.id === exitingLobbyId) {
+            if (shouldIgnoreLobbyScopedMessage(nextLobby?.id)) {
                 return;
             }
-            exitingLobbyId = null;
+            acceptLobbyScopedMessage(nextLobby?.id);
             currentLobby = nextLobby;
             renderLobbyRoom(currentLobby);
             if (currentScreen === 'menu') {
@@ -422,10 +465,19 @@ const App = (() => {
 
         RoboSocket.on('LOBBY_CLOSED', (data) => {
             const closedLobbyId = data?.lobbyId;
-            if (closedLobbyId && currentLobby?.id && currentLobby.id !== closedLobbyId && exitingLobbyId !== closedLobbyId) {
+
+            if (closedLobbyId && exitingLobbyId === closedLobbyId) {
+                if (currentUser) {
+                    RoboSocket.send('REQUEST_LOBBY_LIST', {});
+                }
                 return;
             }
-            exitingLobbyId = null;
+
+            if (shouldIgnoreLobbyScopedMessage(closedLobbyId)) {
+                return;
+            }
+
+            acceptLobbyScopedMessage(closedLobbyId);
             resetLobbyAndGameState();
             returnToHomeScreen();
             if (currentUser) {
@@ -449,7 +501,10 @@ const App = (() => {
 
         // Game state
         RoboSocket.on('GAME_STATE', (data) => {
-            exitingLobbyId = null;
+            if (shouldIgnoreLobbyScopedMessage(data?.lobbyId)) {
+                return;
+            }
+            acceptLobbyScopedMessage(data?.lobbyId);
             if (!gameState) {
                 gameState = data;
             } else {
@@ -461,6 +516,10 @@ const App = (() => {
         });
 
         RoboSocket.on('CARDS_DEALT', (data) => {
+            if (shouldIgnoreLobbyScopedMessage(data?.lobbyId)) {
+                return;
+            }
+            acceptLobbyScopedMessage(data?.lobbyId);
             dealtCards = data.cards || [];
             selectedCards = [];
             blockedSlots = data.blockedSlots || 0;
@@ -469,12 +528,23 @@ const App = (() => {
         });
 
         RoboSocket.on('PROGRAMMING_PHASE_START', (data) => {
+            if (shouldIgnoreLobbyScopedMessage(data?.lobbyId)) {
+                return;
+            }
+            acceptLobbyScopedMessage(data?.lobbyId);
             if (data.status === 'submitted') {
                 toast(data.message || 'Programm eingereicht!', 'success');
             }
         });
 
         RoboSocket.on('EXECUTION_STEP', (data) => {
+            if (shouldIgnoreLobbyScopedMessage(data?.lobbyId)) {
+                return;
+            }
+            acceptLobbyScopedMessage(data?.lobbyId);
+            if (!gameState) {
+                return;
+            }
             if (data.robots) {
                 gameState.robots = data.robots;
                 renderBoard();
@@ -483,6 +553,10 @@ const App = (() => {
         });
 
         RoboSocket.on('GAME_OVER', (data) => {
+            if (shouldIgnoreLobbyScopedMessage(data?.lobbyId)) {
+                return;
+            }
+            acceptLobbyScopedMessage(data?.lobbyId);
             clearRoundState();
             showScreen('end');
             renderEndScreen(data);
@@ -1107,9 +1181,13 @@ const App = (() => {
     // ═══════════════════════════════════════════════════
 
     function joinLobby(lobbyId, hasPassword) {
+        joiningLobbyId = lobbyId;
         if (hasPassword) {
             const pw = prompt('Lobby-Passwort eingeben:');
-            if (pw === null) return; // canceled
+            if (pw === null) {
+                joiningLobbyId = null;
+                return; // canceled
+            }
             RoboSocket.send('JOIN_LOBBY', { lobbyId, password: pw });
         } else {
             RoboSocket.send('JOIN_LOBBY', { lobbyId });

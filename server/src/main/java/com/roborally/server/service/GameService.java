@@ -165,10 +165,10 @@ public class GameService {
                     return cm;
                 }).toList();
 
-                sessionManager.sendToSession(sessionId, Message.of(MessageType.CARDS_DEALT, Map.of(
+                sendGameMessageToPlayer(game, robot.getPlayerId(), MessageType.CARDS_DEALT, Map.of(
                         "cards", handData,
                         "blockedSlots", robot.getBlockedSlots(),
-                        "round", game.getRound())));
+                        "round", game.getRound()));
             }
         }
 
@@ -245,9 +245,9 @@ public class GameService {
         game.markSubmitted(playerId);
         String sessionId = userService.getSessionIdByUserId(playerId);
         if (sessionId != null) {
-            sessionManager.sendToSession(sessionId, Message.of(MessageType.PROGRAMMING_PHASE_START, Map.of(
+            sendGameMessageToPlayer(game, playerId, MessageType.PROGRAMMING_PHASE_START, Map.of(
                     "status", "submitted",
-                    "message", "Programm eingereicht!")));
+                    "message", "Programm eingereicht!"));
         }
 
             log.info("Player {} submitted program for round {}", playerId, game.getRound());
@@ -280,10 +280,10 @@ public class GameService {
             checkCheckpoints(game);
 
             // Broadcast step result for client animation
-            broadcastToGame(game, Message.of(MessageType.EXECUTION_STEP, Map.of(
+            broadcastToGame(game, MessageType.EXECUTION_STEP, Map.of(
                     "step", step + 1,
                     "results", stepResults,
-                    "robots", getRobotStates(game))));
+                    "robots", getRobotStates(game)));
 
             // Check for game over immediately after evaluating checkpoints
             for (Robot robot : game.getRobots().values()) {
@@ -376,8 +376,8 @@ public class GameService {
         String winnerName = userService.getUserById(winnerId)
                 .map(u -> u.getUsername()).orElse("???");
 
-        broadcastToGame(game, Message.of(MessageType.GAME_OVER, Map.of(
-                "winners", List.of(Map.of("userId", winnerId, "username", winnerName)))));
+        broadcastToGame(game, MessageType.GAME_OVER, Map.of(
+                "winners", List.of(Map.of("userId", winnerId, "username", winnerName))));
 
         log.info("Game over! Winner: {} (ID: {})", winnerName, winnerId);
         cleanupGame(game);
@@ -387,8 +387,8 @@ public class GameService {
         game.setPhase(GamePhase.GAME_OVER);
         cancelTimer(game.getLobbyId());
 
-        broadcastToGame(game, Message.of(MessageType.GAME_OVER, Map.of(
-                "winners", List.of())));
+        broadcastToGame(game, MessageType.GAME_OVER, Map.of(
+                "winners", List.of()));
 
         log.info("Game over! All robots destroyed — draw.");
         cleanupGame(game);
@@ -467,20 +467,42 @@ public class GameService {
     // ══════════════════════════════════════════════════════
 
     private void broadcastGameState(GameState game) {
-        broadcastToGame(game, Message.of(MessageType.GAME_STATE, game.toMap()));
+        broadcastToGame(game, MessageType.GAME_STATE, game.toMap());
     }
 
     private void broadcastPhaseUpdate(GameState game, String phase) {
-        broadcastToGame(game, Message.of(MessageType.GAME_STATE, Map.of(
-                "phase", phase, "round", game.getRound())));
+        broadcastToGame(game, MessageType.GAME_STATE, Map.of(
+                "phase", phase, "round", game.getRound()));
     }
 
-    private void broadcastToGame(GameState game, Message message) {
+    private void broadcastToGame(GameState game, MessageType type, Map<String, Object> data) {
+        Message message = Message.of(type, withLobbyId(game, data));
         for (Long playerId : game.getRobots().keySet()) {
-            String sessionId = userService.getSessionIdByUserId(playerId);
-            if (sessionId != null) {
-                sessionManager.sendToSession(sessionId, message);
-            }
+            sendGameMessageToPlayer(game, playerId, message);
         }
+    }
+
+    private void sendGameMessageToPlayer(GameState game, Long playerId, MessageType type, Map<String, Object> data) {
+        sendGameMessageToPlayer(game, playerId, Message.of(type, withLobbyId(game, data)));
+    }
+
+    private void sendGameMessageToPlayer(GameState game, Long playerId, Message message) {
+        if (!Objects.equals(lobbyService.getLobbyIdByUserId(playerId), game.getLobbyId())) {
+            return;
+        }
+
+        String sessionId = userService.getSessionIdByUserId(playerId);
+        if (sessionId != null) {
+            sessionManager.sendToSession(sessionId, message);
+        }
+    }
+
+    private Map<String, Object> withLobbyId(GameState game, Map<String, Object> data) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("lobbyId", game.getLobbyId());
+        if (data != null) {
+            payload.putAll(data);
+        }
+        return payload;
     }
 }

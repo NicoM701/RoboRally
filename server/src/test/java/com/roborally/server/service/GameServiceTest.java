@@ -3,6 +3,8 @@ package com.roborally.server.service;
 import com.roborally.common.enums.CardType;
 import com.roborally.common.enums.Direction;
 import com.roborally.common.enums.GamePhase;
+import com.roborally.common.enums.MessageType;
+import com.roborally.common.protocol.Message;
 import com.roborally.server.model.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -44,6 +46,8 @@ class GameServiceTest {
     void setUp() {
         lobby = new Lobby("lobby-1", "TestLobby", 1L, 4);
         lobby.addPlayer(2L);
+        lenient().when(lobbyService.getLobbyIdByUserId(1L)).thenReturn(lobby.getId());
+        lenient().when(lobbyService.getLobbyIdByUserId(2L)).thenReturn(lobby.getId());
     }
 
     // ═══════════════════════════════════════
@@ -168,6 +172,34 @@ class GameServiceTest {
         assertEquals(5, game.getBoard().getTotalCheckpoints());
     }
 
+    @Test
+    void startGame_gameScopedMessagesIncludeLobbyId() {
+        when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
+        Board board = new Board("test", 12, 12);
+        board.addStartPosition(1, 11);
+        board.addStartPosition(2, 11);
+        board.setTotalCheckpoints(3);
+        when(boardLoader.loadBoard(anyString())).thenReturn(board);
+        when(cardService.createDeck()).thenReturn(createMockDeck());
+        when(cardService.deal(any(), any(), any())).thenReturn(createMockHand());
+        when(userService.getSessionIdByUserId(1L)).thenReturn("session-1");
+        when(userService.getSessionIdByUserId(2L)).thenReturn("session-2");
+        lenient().when(movementService.executeStep(any(), anyInt())).thenReturn(List.of());
+
+        gameService.startGame(1L);
+
+        ArgumentCaptor<Message> messages = ArgumentCaptor.forClass(Message.class);
+        verify(sessionManager, atLeastOnce()).sendToSession(anyString(), messages.capture());
+
+        List<Message> gameScopedMessages = messages.getAllValues().stream()
+                .filter(message -> message.getType() == MessageType.CARDS_DEALT || message.getType() == MessageType.GAME_STATE)
+                .toList();
+
+        assertFalse(gameScopedMessages.isEmpty());
+        assertTrue(gameScopedMessages.stream()
+                .allMatch(message -> lobby.getId().equals(message.getData().get("lobbyId"))));
+    }
+
     // ═══════════════════════════════════════
     // submitProgram
     // ═══════════════════════════════════════
@@ -260,6 +292,24 @@ class GameServiceTest {
     }
 
     @Test
+    void submitProgram_submissionAckIncludesLobbyId() {
+        GameState game = startTestGame();
+        game.getPlayerHands().put(1L, createMockHand());
+        when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
+        when(cardService.validateProgram(any(), any(), any(), anyInt())).thenReturn(null);
+        when(userService.getSessionIdByUserId(1L)).thenReturn("session-1");
+
+        clearInvocations(sessionManager);
+
+        gameService.submitProgram(1L, List.of(1, 2, 3, 4, 5));
+
+        verify(sessionManager).sendToSession(eq("session-1"), argThat(message ->
+                message.getType() == MessageType.PROGRAMMING_PHASE_START
+                        && lobby.getId().equals(message.getData().get("lobbyId"))
+                        && "submitted".equals(message.getData().get("status"))));
+    }
+
+    @Test
     void submitProgram_allSubmitted_startsExecution() {
         GameState game = startTestGame();
         // Submit for player 2 first
@@ -282,6 +332,34 @@ class GameServiceTest {
         // After all submitted, execution should complete and next round starts
         assertTrue(game.getRound() >= 1);
         verify(movementService, times(5)).executeStep(any(), anyInt());
+    }
+
+    @Test
+    void submitProgram_skipsGameBroadcastsToPlayersWhoAlreadyLeftLobby() {
+        GameState game = startTestGame();
+        game.markSubmitted(1L);
+        Robot playerOneRobot = game.getRobot(1L);
+        for (int i = 0; i < 5; i++) {
+            playerOneRobot.setSlot(i, new ProgramCard(10 + i, CardType.MOVE_1, 100 + i));
+        }
+
+        game.getPlayerHands().put(2L, createMockHand());
+        when(lobbyService.getLobbyByUserId(2L)).thenReturn(lobby);
+        when(lobbyService.getLobbyIdByUserId(1L)).thenReturn(null);
+        when(lobbyService.getLobbyIdByUserId(2L)).thenReturn(lobby.getId());
+        when(cardService.validateProgram(any(), any(), any(), anyInt())).thenReturn(null);
+        when(userService.getSessionIdByUserId(1L)).thenReturn("session-1");
+        when(userService.getSessionIdByUserId(2L)).thenReturn("session-2");
+        when(movementService.executeStep(any(), anyInt())).thenReturn(List.of());
+
+        clearInvocations(sessionManager);
+
+        gameService.submitProgram(2L, List.of(1, 2, 3, 4, 5));
+
+        verify(sessionManager, never()).sendToSession(eq("session-1"), any());
+        verify(sessionManager, atLeastOnce()).sendToSession(eq("session-2"), argThat(message ->
+                message.getType() == MessageType.EXECUTION_STEP
+                        && lobby.getId().equals(message.getData().get("lobbyId"))));
     }
 
     // ═══════════════════════════════════════
