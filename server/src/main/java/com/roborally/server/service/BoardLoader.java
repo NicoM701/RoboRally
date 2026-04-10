@@ -131,7 +131,12 @@ public class BoardLoader {
     }
 
     private void applyCheckpoint(Tile tile, int checkpointNumber) {
-        resetTile(tile, FieldType.FLOOR);
+        // Legacy maps can place checkpoints on top of conveyors, so only clear
+        // incompatible top-level elements instead of wiping the whole tile.
+        tile.setFieldType(FieldType.FLOOR);
+        tile.setGear(null);
+        tile.setPusher(null);
+        tile.setPress(null);
         tile.setCheckpoint(new Checkpoint(checkpointNumber));
     }
 
