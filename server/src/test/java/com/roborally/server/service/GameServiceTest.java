@@ -430,12 +430,12 @@ class GameServiceTest {
                 .findFirst()
                 .orElseThrow();
 
-        assertEquals(75, cardsDealt.get("timerSeconds"));
+        assertEquals(Integer.valueOf(75), cardsDealt.get("timerSeconds"));
         assertTrue((Boolean) cardsDealt.get("timerEnabled"));
         assertNotNull(cardsDealt.get("deadlineEpochMs"));
-        assertEquals(75, phaseStart.get("timerSeconds"));
-        assertEquals(0, phaseStart.get("submittedCount"));
-        assertEquals(2, phaseStart.get("totalPlayers"));
+        assertEquals(Integer.valueOf(75), phaseStart.get("timerSeconds"));
+        assertEquals(Integer.valueOf(0), phaseStart.get("submittedCount"));
+        assertEquals(Integer.valueOf(2), phaseStart.get("totalPlayers"));
     }
 
     @Test
@@ -450,10 +450,7 @@ class GameServiceTest {
         when(userService.getSessionIdByUserId(2L)).thenReturn("session-2");
         User alice = new User("Alice", "a@example.com", "hash", false);
         alice.setId(1L);
-        User bob = new User("Bob", "b@example.com", "hash", false);
-        bob.setId(2L);
         when(userService.getUserById(1L)).thenReturn(Optional.of(alice));
-        when(userService.getUserById(2L)).thenReturn(Optional.of(bob));
 
         gameService.submitProgram(1L, List.of(1, 2, 3, 4, 5));
 
@@ -474,9 +471,9 @@ class GameServiceTest {
                 .orElseThrow();
 
         assertEquals("submitted", selfAck.get("status"));
-        assertEquals(1, teamProgress.get("submittedCount"));
-        assertEquals(2, teamProgress.get("totalPlayers"));
-        assertEquals(1L, teamProgress.get("submittedPlayerId"));
+        assertEquals(Integer.valueOf(1), teamProgress.get("submittedCount"));
+        assertEquals(Integer.valueOf(2), teamProgress.get("totalPlayers"));
+        assertEquals(Long.valueOf(1L), teamProgress.get("submittedPlayerId"));
         assertEquals("Alice", teamProgress.get("submittedUsername"));
     }
 
