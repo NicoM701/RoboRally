@@ -192,7 +192,7 @@ public class BoardLoader {
             for (int x = 0; x < board.getWidth(); x++) {
                 Tile tile = board.getTile(x, y);
                 for (Direction wall : tile.getWalls()) {
-                    Tile neighbor = board.getTile(x + wall.dx(), y + wall.dy());
+                    Tile neighbor = board.getTile(x + wall.dx(), y - wall.dy());
                     if (neighbor != null) {
                         neighbor.addWall(wall.opposite());
                     }
@@ -213,8 +213,18 @@ public class BoardLoader {
             maxSpawns = 4;
         }
 
+        boolean markStartTiles = !isLegacyNamedMap(normalizedName);
         for (int x = 1; x <= maxSpawns; x++) {
-            board.addStartPosition(x, 11);
+            board.addStartPosition(x, 11, markStartTiles);
         }
+    }
+
+    private boolean isLegacyNamedMap(String normalizedName) {
+        return normalizedName.equals("map1")
+                || normalizedName.equals("map2")
+                || normalizedName.equals("map3")
+                || normalizedName.equals("map4")
+                || normalizedName.equals("map5")
+                || normalizedName.equals("map6");
     }
 }
