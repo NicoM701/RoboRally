@@ -7,6 +7,7 @@ import com.roborally.server.model.Lobby;
 import com.roborally.server.model.User;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -30,11 +31,14 @@ public class LobbyService {
     private final SessionManager sessionManager;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
     private final BoardLoader boardLoader;
+    private final GameService gameService;
 
-    public LobbyService(UserService userService, SessionManager sessionManager, BoardLoader boardLoader) {
+    public LobbyService(UserService userService, SessionManager sessionManager, BoardLoader boardLoader,
+            @Lazy GameService gameService) {
         this.userService = userService;
         this.sessionManager = sessionManager;
         this.boardLoader = boardLoader;
+        this.gameService = gameService;
     }
 
     // ─── Create ─────────────────────────────────────────
@@ -175,6 +179,7 @@ public class LobbyService {
                 throw new IllegalArgumentException("Spieler ist nicht in dieser Lobby.");
             }
 
+            gameService.handlePlayerDeparture(targetUserId);
             lobby.removePlayer(targetUserId);
             userLobbyMap.remove(targetUserId);
         }
