@@ -894,6 +894,146 @@ const App = (() => {
         return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
     }
 
+    function getRequiredCardCount() {
+        return Math.max(0, 5 - blockedSlots);
+    }
+
+    function getLocalProgramStatus() {
+        const requiredCards = getRequiredCardCount();
+
+        if (programmingState.isSubmitted) {
+            return {
+                label: 'Programm bestätigt',
+                detail: 'Dein Programm ist sicher auf dem Server. Jetzt fehlt nur noch der Rest.',
+                tone: 'success'
+            };
+        }
+
+        if (programmingState.submitPending) {
+            return {
+                label: 'Bestätigung läuft',
+                detail: 'Dein Programm wurde abgeschickt und wartet gerade auf Server-Bestätigung.',
+                tone: 'warning'
+            };
+        }
+
+        if (dealtCards.length) {
+            if (selectedCards.length === requiredCards) {
+                return {
+                    label: 'Bereit zum Einreichen',
+                    detail: 'Alles gewählt – ein Klick fehlt noch.',
+                    tone: 'info'
+                };
+            }
+
+            return {
+                label: `${selectedCards.length}/${requiredCards} Karten gewählt`,
+                detail: `Wähle noch ${Math.max(0, requiredCards - selectedCards.length)} Karte(n), dann kannst du einreichen.`,
+                tone: 'info'
+            };
+        }
+
+        if (gameState?.phase === 'PROGRAMMING') {
+            return {
+                label: 'Warte auf deine Hand',
+                detail: 'Sobald die Karten da sind, kannst du direkt loslegen.',
+                tone: 'muted'
+            };
+        }
+
+        return {
+            label: 'Zwischen den Phasen',
+            detail: 'Gleich geht die nächste Hand auf.',
+            tone: 'muted'
+        };
+    }
+
+    function getNextStepHint(phase, showProgrammingStatus) {
+        if (showProgrammingStatus) {
+            if (programmingState.isSubmitted) {
+                return 'Sobald alle eingeloggt sind oder der Timer endet, startet die Register-Ausführung.';
+            }
+            if (programmingState.submitPending) {
+                return 'Nach der Bestätigung ist dein Platz fix und du wartest nur noch auf den Rest.';
+            }
+            if (executionPlayback.isPlaying) {
+                return 'Der Replay der letzten Register läuft noch, aber deine neue Planung ist schon offen.';
+            }
+            return 'Programmiere jetzt deinen Zug – danach feuert die Fabrik Register 1 bis 5 nacheinander ab.';
+        }
+
+        if (phase === 'EXECUTING') {
+            if (executionPlayback.currentStep >= 5) {
+                return 'Nach dem letzten Register startet direkt die nächste Programmierphase.';
+            }
+            return `Als Nächstes kommt Register ${Math.min(5, executionPlayback.currentStep + 1)}/5.`;
+        }
+
+        return 'Sobald die Runde vorbereitet ist, öffnet sich die nächste Programmierphase.';
+    }
+
+    function getPhaseModeLabel(phase, showProgrammingStatus) {
+        if (executionPlayback.isPlaying && showProgrammingStatus) {
+            return 'Replay + Programmierung';
+        }
+        if (phase === 'EXECUTING') {
+            return 'Replay aktiv';
+        }
+        if (showProgrammingStatus) {
+            return 'Planung live';
+        }
+        return 'Status';
+    }
+
+    function renderRegisterTrack() {
+        const currentStep = executionPlayback.isPlaying ? executionPlayback.currentStep : 0;
+
+        return `<div class="register-track-panel">
+            <div class="timer-row">
+                <span>Rundenfluss</span>
+                <strong>${executionPlayback.isPlaying ? `Register ${currentStep}/5` : gameState?.phase === 'PROGRAMMING' ? 'Programmierung offen' : 'Bereit'}</strong>
+            </div>
+            <div class="register-steps">
+                ${Array.from({ length: 5 }, (_, index) => {
+                    const step = index + 1;
+                    let state = 'upcoming';
+                    if (executionPlayback.isPlaying) {
+                        state = step < currentStep ? 'done' : step === currentStep ? 'current' : 'upcoming';
+                    } else if (gameState?.phase === 'PROGRAMMING') {
+                        state = 'planning';
+                    }
+
+                    return `<div class="register-step ${state}">
+                        <span class="register-step-index">${step}</span>
+                        <small>Register</small>
+                    </div>`;
+                }).join('')}
+            </div>
+        </div>`;
+    }
+
+    function renderCardStatusStrip() {
+        const requiredCards = getRequiredCardCount();
+        const localProgramStatus = getLocalProgramStatus();
+
+        const chips = [
+            `${selectedCards.length}/${requiredCards} gewählt`,
+            `Benötigt ${requiredCards}`
+        ];
+
+        if (blockedSlots > 0) {
+            chips.push(`${blockedSlots} blockiert`);
+        }
+
+        if (programmingState.totalPlayers) {
+            chips.push(`${programmingState.submittedCount}/${programmingState.totalPlayers} eingereicht`);
+        }
+
+        chips.push(localProgramStatus.label);
+
+        return `<div class="card-status-strip">${chips.map(label => `<span class="card-status-chip">${escapeHtml(label)}</span>`).join('')}</div>`;
+    }
+
     function applyProgrammingUpdate(data = {}) {
         if ('timerEnabled' in data) {
             programmingState.enabled = Boolean(data.timerEnabled);
@@ -1180,7 +1320,13 @@ const App = (() => {
         const panel = document.getElementById('game-info-panel');
         if (!panel || !gameState) return;
 
-        const robots = gameState.robots || [];
+        const robots = [...(gameState.robots || [])].sort((a, b) => {
+            const aLocal = a.playerId === currentUser?.userId ? 1 : 0;
+            const bLocal = b.playerId === currentUser?.userId ? 1 : 0;
+            if (aLocal !== bLocal) return bLocal - aLocal;
+            if (a.destroyed !== b.destroyed) return a.destroyed ? 1 : -1;
+            return a.playerId - b.playerId;
+        });
         const localRobot = getLocalRobot();
         const phase = getDisplayedPhase();
         const programmingActive = gameState.phase === 'PROGRAMMING';
@@ -1192,18 +1338,34 @@ const App = (() => {
         const submittedText = programmingState.totalPlayers
             ? `${programmingState.submittedCount}/${programmingState.totalPlayers} eingereicht`
             : 'Status folgt';
+        const localProgramStatus = getLocalProgramStatus();
+        const nextStepHint = getNextStepHint(phase, showProgrammingStatus);
+        const aliveRobots = robots.filter(robot => !robot.destroyed).length;
 
         let html = '<div class="game-command-center">';
         html += `<div class="phase-hero phase-${phase.toLowerCase()}">
             <div class="phase-badge">Runde ${round}</div>
             <div class="phase-title-row">
                 <h3>${getPhaseLabel(phase)}</h3>
-                ${phase === 'EXECUTING' && executionPlayback.currentStep ? `<span class="register-pill">Register ${executionPlayback.currentStep}/5</span>` : ''}
+                <span class="register-pill">${escapeHtml(getPhaseModeLabel(phase, showProgrammingStatus))}</span>
             </div>
             <p class="phase-copy">${escapeHtml(getPhaseCopy(phase))}</p>
+            <div class="phase-focus-grid">
+                <div class="focus-card focus-now ${localProgramStatus.tone}">
+                    <span class="focus-label">JETZT</span>
+                    <strong>${escapeHtml(localProgramStatus.label)}</strong>
+                    <p>${escapeHtml(localProgramStatus.detail)}</p>
+                </div>
+                <div class="focus-card">
+                    <span class="focus-label">ALS NÄCHSTES</span>
+                    <strong>${showProgrammingStatus ? 'Ausführung startet nach der Planung' : 'Nächste Zustandsänderung'}</strong>
+                    <p>${escapeHtml(nextStepHint)}</p>
+                </div>
+            </div>
             <div class="phase-meta">
                 <span>${showProgrammingStatus ? submittedText : `Roboter aktiv: ${robots.filter(robot => !robot.destroyed).length}`}</span>
                 <span>${localRobot ? `${escapeHtml(getPlayerName(localRobot.playerId))} steuert ${escapeHtml(getRobotLabel(localRobot))}` : 'Roboter wird gesucht'}</span>
+                <span>${aliveRobots} aktiv · ${robots.length - aliveRobots} zerstört</span>
             </div>
             ${showProgrammingStatus ? `
                 <div class="timer-panel ${timerTone}">
@@ -1214,6 +1376,7 @@ const App = (() => {
                     <div class="timer-track"><div class="timer-fill ${timerTone}" style="width:${timerPercent}%"></div></div>
                 </div>
             ` : ''}
+            ${renderRegisterTrack()}
         </div>`;
 
         html += `<div class="game-section pilot-card ${localRobot ? '' : 'empty'}">
@@ -1232,6 +1395,7 @@ const App = (() => {
                     <span>💥 ${localRobot.damage}</span>
                     <span>🏁 CP ${Math.max(0, localRobot.nextCheckpoint - 1)}</span>
                 </div>
+                <div class="pilot-callout ${localProgramStatus.tone}">${escapeHtml(localProgramStatus.detail)}</div>
             ` : '<p>Dein Roboter ist noch nicht im Spiel sichtbar.</p>'}
         </div>`;
 
@@ -1270,7 +1434,8 @@ const App = (() => {
         const panel = document.getElementById('game-cards-panel');
         if (!panel) return;
 
-        const needed = 5 - blockedSlots;
+        const needed = getRequiredCardCount();
+        const localProgramStatus = getLocalProgramStatus();
         if (!dealtCards.length) {
             const previewCards = submittedProgramPreview.length
                 ? `<div class="program-plan">${submittedProgramPreview.map((card, index) => `
@@ -1283,19 +1448,26 @@ const App = (() => {
 
             panel.innerHTML = `
                 <h3>🎴 Programmierung</h3>
+                ${renderCardStatusStrip()}
                 <div class="card-hand-empty">
                     <strong>${executionPlayback.isPlaying ? 'Ausführung läuft' : programmingState.isSubmitted ? 'Programm eingeloggt' : 'Warte auf die nächste Hand'}</strong>
                     <p>${executionPlayback.isPlaying
-                        ? 'Die Register werden gerade Schritt für Schritt abgespielt.'
+                        ? gameState?.phase === 'PROGRAMMING'
+                            ? 'Der Replay läuft noch, aber deine nächste Programmierphase ist bereits live. Sobald Karten da sind, kannst du parallel planen.'
+                            : 'Die Register werden gerade Schritt für Schritt abgespielt.'
                         : programmingState.isSubmitted
                             ? 'Deine Auswahl ist gesichert. Jetzt die Show genießen.'
-                            : 'Sobald die nächste Runde startet, tauchen hier wieder deine Karten auf.'}</p>
+                            : `${localProgramStatus.detail}`}</p>
                     ${previewCards}
                 </div>`;
             return;
         }
 
         let html = `<h3>🎴 Deine Karten <small>(${selectedCards.length}/${needed} gewählt)</small></h3>`;
+        html += renderCardStatusStrip();
+        if (executionPlayback.isPlaying) {
+            html += '<div class="programming-summary emphasis">🎬 Replay läuft noch – du kannst trotzdem schon die nächste Runde planen.</div>';
+        }
         if (blockedSlots > 0) {
             html += `<div class="programming-summary">${blockedSlots} Register sind durch Schaden blockiert und bleiben aus der Vorrunde liegen.</div>`;
         }

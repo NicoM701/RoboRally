@@ -977,6 +977,56 @@ button {
     line-height: 1.45;
 }
 
+.phase-focus-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.focus-card {
+    padding: 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.focus-card strong {
+    display: block;
+    color: var(--text-primary);
+    margin-bottom: 6px;
+    font-size: 13px;
+}
+
+.focus-card p {
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.focus-label {
+    display: inline-block;
+    margin-bottom: 8px;
+    color: var(--text-muted);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    font-weight: 700;
+}
+
+.focus-card.success {
+    border-color: rgba(6, 214, 160, 0.28);
+    background: rgba(6, 214, 160, 0.09);
+}
+
+.focus-card.warning {
+    border-color: rgba(255, 209, 102, 0.26);
+    background: rgba(255, 209, 102, 0.09);
+}
+
+.focus-card.info {
+    border-color: rgba(17, 138, 178, 0.22);
+    background: rgba(17, 138, 178, 0.08);
+}
+
 .phase-meta {
     display: flex;
     flex-wrap: wrap;
@@ -1031,6 +1081,85 @@ button {
     background: linear-gradient(90deg, var(--accent-danger), #ff8fab);
 }
 
+.register-track-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.025);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.register-steps {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.register-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 6px;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--text-muted);
+}
+
+.register-step small {
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
+.register-step-index {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-primary);
+}
+
+.register-step.done {
+    border-color: rgba(6, 214, 160, 0.22);
+    background: rgba(6, 214, 160, 0.08);
+}
+
+.register-step.done .register-step-index,
+.register-step.current .register-step-index,
+.register-step.planning .register-step-index {
+    color: #0a0e17;
+}
+
+.register-step.done .register-step-index {
+    background: rgba(6, 214, 160, 0.9);
+}
+
+.register-step.current {
+    border-color: rgba(255, 209, 102, 0.32);
+    background: rgba(255, 209, 102, 0.12);
+    box-shadow: 0 0 0 1px rgba(255, 209, 102, 0.12);
+}
+
+.register-step.current .register-step-index {
+    background: rgba(255, 209, 102, 0.92);
+}
+
+.register-step.planning {
+    border-style: dashed;
+}
+
+.register-step.planning .register-step-index {
+    background: rgba(17, 138, 178, 0.88);
+}
+
 .section-kicker {
     font-size: 10px;
     letter-spacing: 0.16em;
@@ -1066,6 +1195,31 @@ button {
     margin-top: 10px;
     color: var(--text-secondary);
     font-size: 12px;
+}
+
+.pilot-callout {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    line-height: 1.45;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.pilot-callout.success {
+    border-color: rgba(6, 214, 160, 0.28);
+    background: rgba(6, 214, 160, 0.09);
+}
+
+.pilot-callout.warning {
+    border-color: rgba(255, 209, 102, 0.24);
+    background: rgba(255, 209, 102, 0.09);
+}
+
+.pilot-callout.info {
+    border-color: rgba(17, 138, 178, 0.22);
+    background: rgba(17, 138, 178, 0.08);
 }
 
 .robot-status-list {
@@ -1173,6 +1327,26 @@ button {
     font-size: 11px;
 }
 
+.card-status-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.card-status-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+}
+
 .card-hand {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
@@ -1257,6 +1431,11 @@ button {
 
 .programming-summary {
     margin-bottom: 10px;
+}
+
+.programming-summary.emphasis {
+    border-color: rgba(17, 138, 178, 0.24);
+    background: rgba(17, 138, 178, 0.08);
 }
 
 .card-hand-empty strong {
@@ -1415,6 +1594,14 @@ button {
 @media (max-width: 900px) {
     .chat-panel {
         display: none;
+    }
+
+    .phase-focus-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .register-steps {
+        grid-template-columns: repeat(5, minmax(52px, 1fr));
     }
 
     .lobby-room-content {
