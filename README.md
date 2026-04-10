@@ -59,7 +59,7 @@ A multiplayer implementation of the classic **RoboRally** board game, built with
 ## 📂 Project Structure
 
 ```
-roborally/
+RoboRally/
 ├── common/         # Shared enums (CardType, Direction, GamePhase, ...) + Message protocol
 ├── server/         # Spring Boot server (models, services, WebSocket controller)
 │   ├── model/      # Board, Tile, Robot, ProgramCard, GameState, Lobby, User, ...
@@ -77,12 +77,13 @@ roborally/
 ## 🚀 Getting Started
 
 ### Prerequisites
-- **Java 17+** (JDK)
-- **Gradle** (wrapper included)
+- **Java 17** (JDK)
+- Use the Gradle wrapper: `./gradlew` on macOS/Linux or `gradlew.bat` on Windows
 
 ### Run the server
+From the repository root:
+
 ```bash
-cd roborally
 ./gradlew bootRun
 ```
 
@@ -93,6 +94,8 @@ Navigate to [http://localhost:8080](http://localhost:8080) in your browser.
 ```bash
 ./gradlew test
 ```
+
+> GitHub Actions runs the same Gradle test command on both Linux and macOS with Temurin JDK 17.
 
 ### Run tests with coverage report
 ```bash

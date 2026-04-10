@@ -5,6 +5,8 @@ plugins {
     id 'io.spring.dependency-management' version '1.1.4' apply false
 }
 
+def javaRelease = 17
+
 allprojects {
     group = 'com.roborally'
     version = '1.0.0-SNAPSHOT'
@@ -19,12 +21,16 @@ subprojects {
     apply plugin: 'jacoco'
 
     java {
+        toolchain {
+            languageVersion = JavaLanguageVersion.of(javaRelease)
+        }
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    tasks.withType(JavaCompile) {
+    tasks.withType(JavaCompile).configureEach {
         options.encoding = 'UTF-8'
+        options.release = javaRelease
     }
 
     jacocoTestReport {
@@ -58,4 +64,3 @@ task jacocoMergedReport(type: JacocoReport) {
         csv.required = true
     }
 }
-

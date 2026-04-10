@@ -214,11 +214,6 @@ public class LobbyService {
             if (newMaxPlayers < 2 || newMaxPlayers > 8) {
                 throw new IllegalArgumentException("Spieleranzahl muss zwischen 2 und 8 liegen.");
             }
-            String currentBoard = (String) lobby.getGameSettings().getOrDefault("boardName", "map1");
-            Board board = boardLoader.loadBoard(currentBoard);
-            if (board.getStartPositions().size() < newMaxPlayers) {
-                throw new IllegalArgumentException("Das aktuelle Spielbrett (" + currentBoard + ") unterstützt nur " + board.getStartPositions().size() + " Spieler.");
-            }
             lobby.setMaxPlayers(newMaxPlayers);
         }
 

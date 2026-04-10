@@ -72,19 +72,21 @@ We have just completed **Sprint 4**. Here is what is functional:
 ---
 
 ## 🛠️ How to Run & Test
+**Java requirement:** JDK 17.
+
 **Start the Application:**
 ```bash
-cd roborally
 ./gradlew bootRun
 ```
 *The UI will be accessible at: `http://localhost:8080`*
 
-**Run the Tests:**
+**Run the Tests (from the repository root):**
 ```bash
-cd roborally
 ./gradlew clean test jacocoTestReport
 ```
 *Check `server/build/reports/jacoco/test/html/index.html` for coverage.*
+
+CI mirrors this with the Gradle wrapper on Linux and macOS using Temurin JDK 17.
 
 ---
 
