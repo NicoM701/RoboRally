@@ -565,6 +565,9 @@ const App = (() => {
         // Errors
         RoboSocket.on('ERROR', (data) => {
             const msg = data.message || 'Unbekannter Fehler.';
+            if (!getActiveLobbyId()) {
+                joiningLobbyId = null;
+            }
             if (currentScreen === 'login') {
                 showAuthMessage(msg);
             } else {
