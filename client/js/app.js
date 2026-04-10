@@ -414,32 +414,22 @@ const App = (() => {
         });
 
         RoboSocket.on('CARDS_DEALT', (data) => {
-            if (executionPlayback.isPlaying || executionPlayback.queue.length > 0) {
-                executionPlayback.pendingCards = data;
-                bufferProgrammingUpdate({ ...data, phase: 'PROGRAMMING', status: 'started' });
-                return;
-            }
-
             applyDealtCards(data);
         });
 
         RoboSocket.on('PROGRAMMING_PHASE_START', (data) => {
             if (data.status === 'submitted') {
-                programmingState.isSubmitted = true;
+                confirmProgramSubmission();
                 toast(data.message || 'Programm eingereicht!', 'success');
-                return;
-            }
-
-            if (executionPlayback.isPlaying || executionPlayback.queue.length > 0) {
-                bufferProgrammingUpdate(data);
                 return;
             }
 
             applyProgrammingUpdate(data);
             if (data.submittedUsername && data.submittedPlayerId !== currentUser?.userId) {
                 pushGameEvent(`${data.submittedUsername} hat sein Programm eingerastet.`, 'programming');
-                renderGameInfo();
             }
+            renderCardHand();
+            renderGameInfo();
         });
 
         RoboSocket.on('EXECUTION_STEP', (data) => {
@@ -458,6 +448,7 @@ const App = (() => {
         // Errors
         RoboSocket.on('ERROR', (data) => {
             const msg = data.message || 'Unbekannter Fehler.';
+            rollbackPendingProgramSubmission();
             if (currentScreen === 'login') {
                 showAuthMessage(msg);
             } else {
@@ -792,7 +783,9 @@ const App = (() => {
             deadlineEpochMs: null,
             submittedCount: 0,
             totalPlayers: 0,
-            isSubmitted: false
+            isSubmitted: false,
+            submitPending: false,
+            pendingCardIds: []
         };
     }
 
@@ -803,8 +796,6 @@ const App = (() => {
             round: null,
             currentStep: 0,
             currentSummary: '',
-            pendingCards: null,
-            pendingProgrammingUpdate: null,
             pendingGameOver: null
         };
     }
@@ -876,6 +867,9 @@ const App = (() => {
         if (phase === 'PROGRAMMING' && programmingState.isSubmitted) {
             return 'Dein Programm sitzt. Jetzt können die anderen fertig planen oder der Timer läuft aus.';
         }
+        if (phase === 'EXECUTING' && gameState?.phase === 'PROGRAMMING') {
+            return 'Der Replay der letzten Register läuft noch. Deine nächste Hand ist schon da – du kannst parallel weiterprogrammieren.';
+        }
         if (phase === 'EXECUTING' && executionPlayback.currentSummary) {
             return executionPlayback.currentSummary;
         }
@@ -932,6 +926,8 @@ const App = (() => {
 
         if ((data.phase === 'PROGRAMMING' || data.status === 'started') && !('submittedPlayerId' in data)) {
             programmingState.isSubmitted = false;
+            programmingState.submitPending = false;
+            programmingState.pendingCardIds = [];
         }
         if (data.status === 'submitted') {
             programmingState.isSubmitted = true;
@@ -952,11 +948,32 @@ const App = (() => {
         }
     }
 
-    function bufferProgrammingUpdate(data) {
-        executionPlayback.pendingProgrammingUpdate = {
-            ...(executionPlayback.pendingProgrammingUpdate || {}),
-            ...data
-        };
+    function getSelectedProgramPreview(cardIds = selectedCards) {
+        return cardIds
+            .map(cardId => dealtCards.find(card => card.id === cardId))
+            .filter(Boolean);
+    }
+
+    function confirmProgramSubmission() {
+        submittedProgramPreview = getSelectedProgramPreview(
+            programmingState.pendingCardIds.length ? programmingState.pendingCardIds : selectedCards
+        );
+        programmingState.submitPending = false;
+        programmingState.pendingCardIds = [];
+        programmingState.isSubmitted = true;
+        dealtCards = [];
+        selectedCards = [];
+        pushGameEvent('Programm eingeloggt. Jetzt darf der Rest nachziehen.', 'programming');
+        renderCardHand();
+        renderGameInfo();
+    }
+
+    function rollbackPendingProgramSubmission() {
+        if (!programmingState.submitPending) return;
+        programmingState.submitPending = false;
+        programmingState.pendingCardIds = [];
+        renderCardHand();
+        renderGameInfo();
     }
 
     function summarizeExecutionStep(stepData) {
@@ -1060,22 +1077,11 @@ const App = (() => {
         executionPlayback.currentSummary = '';
         executionPlayback.round = null;
 
-        const pendingProgrammingUpdate = executionPlayback.pendingProgrammingUpdate;
-        const pendingCards = executionPlayback.pendingCards;
         const pendingGameOver = executionPlayback.pendingGameOver;
 
-        executionPlayback.pendingProgrammingUpdate = null;
-        executionPlayback.pendingCards = null;
         executionPlayback.pendingGameOver = null;
 
-        if (pendingProgrammingUpdate) {
-            applyProgrammingUpdate(pendingProgrammingUpdate);
-        }
-        if (pendingCards) {
-            applyDealtCards(pendingCards);
-        } else {
-            renderGameInfo();
-        }
+        renderGameInfo();
 
         if (pendingGameOver) {
             showGameOver(pendingGameOver);
@@ -1177,6 +1183,8 @@ const App = (() => {
         const robots = gameState.robots || [];
         const localRobot = getLocalRobot();
         const phase = getDisplayedPhase();
+        const programmingActive = gameState.phase === 'PROGRAMMING';
+        const showProgrammingStatus = phase === 'PROGRAMMING' || programmingActive;
         const round = getDisplayedRound();
         const remainingMs = getProgrammingRemainingMs();
         const timerPercent = getProgrammingProgressPercent();
@@ -1194,10 +1202,10 @@ const App = (() => {
             </div>
             <p class="phase-copy">${escapeHtml(getPhaseCopy(phase))}</p>
             <div class="phase-meta">
-                <span>${phase === 'PROGRAMMING' ? submittedText : `Roboter aktiv: ${robots.filter(robot => !robot.destroyed).length}`}</span>
+                <span>${showProgrammingStatus ? submittedText : `Roboter aktiv: ${robots.filter(robot => !robot.destroyed).length}`}</span>
                 <span>${localRobot ? `${escapeHtml(getPlayerName(localRobot.playerId))} steuert ${escapeHtml(getRobotLabel(localRobot))}` : 'Roboter wird gesucht'}</span>
             </div>
-            ${phase === 'PROGRAMMING' ? `
+            ${showProgrammingStatus ? `
                 <div class="timer-panel ${timerTone}">
                     <div class="timer-row">
                         <span>Programmierung</span>
@@ -1291,6 +1299,9 @@ const App = (() => {
         if (blockedSlots > 0) {
             html += `<div class="programming-summary">${blockedSlots} Register sind durch Schaden blockiert und bleiben aus der Vorrunde liegen.</div>`;
         }
+        if (programmingState.submitPending) {
+            html += '<div class="programming-summary">⏳ Programm wird bestätigt …</div>';
+        }
         html += '<div class="card-hand">';
         for (const card of dealtCards) {
             const isSelected = selectedCards.includes(card.id);
@@ -1319,13 +1330,16 @@ const App = (() => {
         }
 
         if (selectedCards.length === needed) {
-            html += '<button class="btn btn-primary btn-submit-program" onclick="App.submitProgram()">✅ Programm einreichen</button>';
+            html += `<button class="btn btn-primary btn-submit-program" onclick="App.submitProgram()" ${programmingState.submitPending ? 'disabled' : ''}>${programmingState.submitPending ? '⏳ Wird eingereicht …' : '✅ Programm einreichen'}</button>`;
         }
 
         panel.innerHTML = html;
     }
 
     function toggleCard(cardId) {
+        if (programmingState.submitPending || programmingState.isSubmitted) {
+            return;
+        }
         const needed = 5 - blockedSlots;
         const idx = selectedCards.indexOf(cardId);
         if (idx >= 0) {
@@ -1337,21 +1351,18 @@ const App = (() => {
     }
 
     function submitProgram() {
+        if (programmingState.submitPending || programmingState.isSubmitted) {
+            return;
+        }
         if (selectedCards.length !== 5 - blockedSlots) {
             toast('Wähle erst die richtige Anzahl Karten!', 'error');
             return;
         }
-        submittedProgramPreview = selectedCards
-            .map(cardId => dealtCards.find(card => card.id === cardId))
-            .filter(Boolean);
-        programmingState.isSubmitted = true;
-        programmingState.submittedCount = Math.min(programmingState.totalPlayers || Infinity, programmingState.submittedCount + 1);
-        pushGameEvent('Programm abgeschickt. Jetzt abwarten, ob der Rest schnell genug ist.', 'programming');
-        RoboSocket.send('SUBMIT_PROGRAM', { cardIds: selectedCards });
-        dealtCards = [];
-        selectedCards = [];
+        programmingState.submitPending = true;
+        programmingState.pendingCardIds = [...selectedCards];
         renderCardHand();
         renderGameInfo();
+        RoboSocket.send('SUBMIT_PROGRAM', { cardIds: selectedCards });
     }
 
     // ═══════════════════════════════════════════════════
