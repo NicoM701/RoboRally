@@ -437,6 +437,10 @@ const App = (() => {
         });
 
         RoboSocket.on('GAME_OVER', (data) => {
+            if (!shouldAcceptGameOver()) {
+                return;
+            }
+
             if (executionPlayback.isPlaying || executionPlayback.queue.length > 0) {
                 executionPlayback.pendingGameOver = data;
                 return;
@@ -830,6 +834,61 @@ const App = (() => {
         executionPlayback = createExecutionPlaybackState();
     }
 
+    function hasActiveGamePresentation() {
+        return Boolean(currentUser && currentLobby && gameState && currentScreen === 'game');
+    }
+
+    function hasMatchingExecutionRobots(robots) {
+        if (!Array.isArray(robots) || !robots.length || !Array.isArray(gameState?.robots) || !gameState.robots.length) {
+            return true;
+        }
+
+        const currentPlayerIds = [...new Set(gameState.robots.map(robot => robot.playerId))].sort((a, b) => a - b);
+        const incomingPlayerIds = [...new Set(robots.map(robot => robot.playerId))].sort((a, b) => a - b);
+
+        if (currentPlayerIds.length !== incomingPlayerIds.length) {
+            return false;
+        }
+
+        return currentPlayerIds.every((playerId, index) => playerId === incomingPlayerIds[index]);
+    }
+
+    function shouldAcceptExecutionStep(data) {
+        if (!hasActiveGamePresentation()) {
+            return false;
+        }
+
+        if (!hasMatchingExecutionRobots(data?.robots)) {
+            return false;
+        }
+
+        if (executionPlayback.isPlaying || executionPlayback.queue.length > 0) {
+            return true;
+        }
+
+        if (gameState?.phase !== 'EXECUTING') {
+            return false;
+        }
+
+        if (data?.round && gameState?.round && data.round !== gameState.round) {
+            return false;
+        }
+
+        return true;
+    }
+
+    function shouldAcceptGameOver() {
+        if (executionPlayback.isPlaying || executionPlayback.queue.length > 0) {
+            return true;
+        }
+
+        if (!hasActiveGamePresentation()) {
+            return false;
+        }
+
+        return ['EXECUTING', 'ROUND_CLEANUP', 'GAME_OVER'].includes(gameState?.phase);
+    }
+
     function getPlayerName(playerId) {
         const player = currentLobby?.players?.find(entry => entry.userId === playerId);
         return player?.username || `Spieler ${playerId}`;
@@ -1177,6 +1236,10 @@ const App = (() => {
     }
 
     function queueExecutionStep(data) {
+        if (!shouldAcceptExecutionStep(data)) {
+            return;
+        }
+
         executionPlayback.queue.push({
             ...data,
             round: data.round || executionPlayback.round || gameState?.round || 1,
@@ -1776,11 +1839,46 @@ const App = (() => {
         }
     });
 
-    return {
+    const api = {
         joinLobby,
         toast,
         showScreen,
         toggleCard,
         submitProgram
     };
+
+    if (typeof globalThis !== 'undefined' && globalThis.__APP_TEST_HOOKS__) {
+        api.__testHooks = {
+            resetGamePresentation,
+            queueExecutionStep,
+            shouldAcceptExecutionStep,
+            shouldAcceptGameOver,
+            setState(state = {}) {
+                if (Object.prototype.hasOwnProperty.call(state, 'currentUser')) {
+                    currentUser = state.currentUser;
+                }
+                if (Object.prototype.hasOwnProperty.call(state, 'currentScreen')) {
+                    currentScreen = state.currentScreen;
+                }
+                if (Object.prototype.hasOwnProperty.call(state, 'currentLobby')) {
+                    currentLobby = state.currentLobby;
+                }
+                if (Object.prototype.hasOwnProperty.call(state, 'gameState')) {
+                    gameState = state.gameState;
+                }
+                if (Object.prototype.hasOwnProperty.call(state, 'executionPlayback')) {
+                    executionPlayback = {
+                        ...createExecutionPlaybackState(),
+                        ...(state.executionPlayback || {}),
+                        queue: [...(state.executionPlayback?.queue || [])]
+                    };
+                }
+            },
+            getExecutionPlaybackState() {
+                return executionPlayback;
+            }
+        };
+    }
+
+    return api;
 })();
