@@ -101,4 +101,15 @@ class LobbyServiceLeaveFlowTest {
         verify(gameService).handlePlayerLeave(lobby.getId(), 1L);
         verify(gameService).cancelActiveGame(lobby.getId());
     }
+
+    @Test
+    void kickPlayer_activeGameRemovesPlayerFromGameService() {
+        Lobby lobby = lobbyService.createLobby(1L, "Match", null, 4);
+        lobbyService.joinLobby(2L, lobby.getId(), null);
+        lobby.setStatus(Lobby.LobbyStatus.IN_GAME);
+
+        lobbyService.kickPlayer(1L, 2L);
+
+        verify(gameService).handlePlayerLeave(lobby.getId(), 2L);
+    }
 }

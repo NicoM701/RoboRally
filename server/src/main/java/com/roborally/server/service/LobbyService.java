@@ -199,6 +199,10 @@ public class LobbyService {
             userLobbyMap.remove(targetUserId);
         }
 
+        if (lobby.getStatus() == Lobby.LobbyStatus.IN_GAME && gameService != null) {
+            gameService.handlePlayerLeave(lobbyId, targetUserId);
+        }
+
         String kickedName = getUsernameById(targetUserId);
         log.info("User {} kicked from lobby '{}' by host", kickedName, lobby.getName());
 
