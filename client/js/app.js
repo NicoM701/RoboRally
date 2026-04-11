@@ -394,23 +394,11 @@ const App = (() => {
 
         // Game state
         RoboSocket.on('GAME_STATE', (data) => {
-            if (!gameState) {
-                gameState = data;
-            } else {
-                Object.assign(gameState, data);
+            if (!shouldAcceptGameState(data)) {
+                return;
             }
 
-            if (!programmingState.totalPlayers && gameState.robots) {
-                programmingState.totalPlayers = gameState.robots.filter(robot => !robot.destroyed).length;
-            }
-
-            if (data.phase === 'PROGRAMMING') {
-                applyProgrammingUpdate({ phase: 'PROGRAMMING' });
-            }
-
-            showScreen('game');
-            renderBoard();
-            renderGameInfo();
+            applyIncomingGameState(data);
         });
 
         RoboSocket.on('CARDS_DEALT', (data) => {
@@ -834,8 +822,44 @@ const App = (() => {
         executionPlayback = createExecutionPlaybackState();
     }
 
+    function applyIncomingGameState(data) {
+        if (!gameState) {
+            gameState = data;
+        } else {
+            Object.assign(gameState, data);
+        }
+
+        if (!programmingState.totalPlayers && gameState.robots) {
+            programmingState.totalPlayers = gameState.robots.filter(robot => !robot.destroyed).length;
+        }
+
+        if (data.phase === 'PROGRAMMING') {
+            applyProgrammingUpdate({ phase: 'PROGRAMMING' });
+        }
+
+        showScreen('game');
+        renderBoard();
+        renderGameInfo();
+    }
+
+    function hasLobbyGameContext() {
+        return Boolean(currentUser && currentLobby && ['lobby', 'game', 'end'].includes(currentScreen));
+    }
+
     function hasActiveGamePresentation() {
         return Boolean(currentUser && currentLobby && gameState && currentScreen === 'game');
+    }
+
+    function shouldAcceptGameState(data) {
+        if (!hasLobbyGameContext()) {
+            return false;
+        }
+
+        if (!gameState) {
+            return true;
+        }
+
+        return hasMatchingExecutionRobots(data?.robots);
     }
 
     function hasMatchingExecutionRobots(robots) {
@@ -1851,6 +1875,7 @@ const App = (() => {
         api.__testHooks = {
             resetGamePresentation,
             queueExecutionStep,
+            shouldAcceptGameState,
             shouldAcceptExecutionStep,
             shouldAcceptGameOver,
             setState(state = {}) {

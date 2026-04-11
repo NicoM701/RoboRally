@@ -86,6 +86,63 @@ test('late execution steps are ignored after reset removes the active game conte
     assert.equal(playback.isPlaying, false);
 });
 
+test('late game state messages are ignored after reset clears the lobby/game context', () => {
+    const hooks = loadAppHooks();
+
+    hooks.resetGamePresentation();
+    hooks.setState({
+        currentUser: { userId: 1, username: 'Nico' },
+        currentLobby: null,
+        currentScreen: 'menu',
+        gameState: null,
+        executionPlayback: { queue: [], isPlaying: false }
+    });
+
+    assert.equal(hooks.shouldAcceptGameState({
+        phase: 'PROGRAMMING',
+        robots: [{ playerId: 1 }, { playerId: 2 }]
+    }), false);
+});
+
+test('game state messages are accepted when the user still has an active lobby context', () => {
+    const hooks = loadAppHooks();
+
+    hooks.setState({
+        currentUser: { userId: 1, username: 'Nico' },
+        currentLobby: { id: 'fresh-lobby', players: [{ userId: 1 }, { userId: 2 }] },
+        currentScreen: 'lobby',
+        gameState: null,
+        executionPlayback: { queue: [], isPlaying: false }
+    });
+
+    assert.equal(hooks.shouldAcceptGameState({
+        phase: 'PROGRAMMING',
+        robots: [{ playerId: 1 }, { playerId: 2 }]
+    }), true);
+});
+
+test('mismatched robot rosters are rejected as stale game state updates for an active game', () => {
+    const hooks = loadAppHooks();
+
+    hooks.setState({
+        currentUser: { userId: 1, username: 'Nico' },
+        currentLobby: { id: 'fresh-lobby' },
+        currentScreen: 'game',
+        gameState: {
+            phase: 'PROGRAMMING',
+            round: 2,
+            robots: [{ playerId: 1 }, { playerId: 2 }]
+        },
+        executionPlayback: { queue: [], isPlaying: false }
+    });
+
+    assert.equal(hooks.shouldAcceptGameState({
+        phase: 'PROGRAMMING',
+        round: 2,
+        robots: [{ playerId: 1 }, { playerId: 3 }]
+    }), false);
+});
+
 test('execution steps are ignored when the current game is not in the execution phase yet', () => {
     const hooks = loadAppHooks();
 
