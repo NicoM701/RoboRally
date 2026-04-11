@@ -446,9 +446,12 @@ class GameServiceTest {
 
         assertEquals(Integer.valueOf(75), cardsDealt.get("timerSeconds"));
         assertTrue((Boolean) cardsDealt.get("timerEnabled"));
-        assertNotNull(cardsDealt.get("deadlineEpochMs"));
+        Object cardsDeadlineValue = cardsDealt.get("deadlineEpochMs");
+        assertNotNull(cardsDeadlineValue);
+        Long cardsDeadlineEpochMs = ((Number) cardsDeadlineValue).longValue();
         assertEquals(Integer.valueOf(75), phaseStart.get("timerSeconds"));
-        assertEquals(cardsDealt.get("deadlineEpochMs"), phaseStart.get("deadlineEpochMs"));
+        Long phaseDeadlineEpochMs = ((Number) phaseStart.get("deadlineEpochMs")).longValue();
+        assertEquals(cardsDeadlineEpochMs, phaseDeadlineEpochMs);
         assertEquals(Integer.valueOf(0), phaseStart.get("submittedCount"));
         assertEquals(Integer.valueOf(2), phaseStart.get("totalPlayers"));
     }
