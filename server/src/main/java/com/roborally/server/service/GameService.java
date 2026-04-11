@@ -395,11 +395,69 @@ public class GameService {
     }
 
     private void cleanupGame(GameState game) {
+        cancelTimer(game.getLobbyId());
         games.remove(game.getLobbyId());
         Lobby lobby = lobbyService.getLobbyById(game.getLobbyId());
         if (lobby != null) {
             lobby.setStatus(Lobby.LobbyStatus.WAITING);
         }
+    }
+
+    public void handlePlayerLeave(String lobbyId, Long playerId) {
+        GameState game = games.get(lobbyId);
+        if (game == null) {
+            return;
+        }
+
+        synchronized (game) {
+            Robot removedRobot = game.getRobot(playerId);
+            if (removedRobot == null) {
+                return;
+            }
+
+            List<ProgramCard> hand = new ArrayList<>(game.getHand(playerId));
+            if (!hand.isEmpty()) {
+                game.getDiscardPile().addAll(hand);
+            }
+            game.getPlayerHands().remove(playerId);
+
+            for (int slot = 0; slot < 5; slot++) {
+                ProgramCard programmedCard = removedRobot.getSlot(slot);
+                if (programmedCard != null) {
+                    game.getDiscardPile().add(programmedCard);
+                }
+            }
+
+            game.removeRobot(playerId);
+            game.clearSubmission(playerId);
+
+            if (game.getRobots().isEmpty()) {
+                cancelActiveGame(lobbyId);
+                return;
+            }
+
+            if (game.getAliveRobots().isEmpty()) {
+                endGameDraw(game);
+                return;
+            }
+
+            if (game.getAliveRobots().size() == 1) {
+                endGame(game, game.getAliveRobots().get(0).getPlayerId());
+                return;
+            }
+
+            broadcastGameState(game);
+
+            if (game.getPhase() == GamePhase.PROGRAMMING && game.allSubmitted()) {
+                cancelTimer(game.getLobbyId());
+                startExecutionPhase(game);
+            }
+        }
+    }
+
+    public void cancelActiveGame(String lobbyId) {
+        cancelTimer(lobbyId);
+        games.remove(lobbyId);
     }
 
     // ══════════════════════════════════════════════════════

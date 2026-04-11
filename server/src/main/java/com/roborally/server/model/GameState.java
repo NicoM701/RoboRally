@@ -76,6 +76,10 @@ public class GameState {
         robots.put(playerId, robot);
     }
 
+    public Robot removeRobot(Long playerId) {
+        return robots.remove(playerId);
+    }
+
     /** Get living (not permanently dead) robots. */
     public List<Robot> getAliveRobots() {
         return robots.values().stream().filter(Robot::isAlive).toList();
@@ -114,6 +118,10 @@ public class GameState {
 
     public void markSubmitted(Long playerId) {
         submittedPlayers.add(playerId);
+    }
+
+    public void clearSubmission(Long playerId) {
+        submittedPlayers.remove(playerId);
     }
 
     public boolean allSubmitted() {

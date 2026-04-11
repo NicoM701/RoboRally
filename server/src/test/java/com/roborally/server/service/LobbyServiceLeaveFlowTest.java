@@ -29,12 +29,16 @@ class LobbyServiceLeaveFlowTest {
     private SessionManager sessionManager;
     @Mock
     private BoardLoader boardLoader;
+    @Mock
+    private GameService gameService;
 
     @InjectMocks
     private LobbyService lobbyService;
 
     @BeforeEach
     void setUp() {
+        lobbyService.setGameService(gameService);
+
         Board board = new Board("map3", 12, 12);
         board.addStartPosition(1, 11);
         board.addStartPosition(2, 11);
@@ -74,5 +78,27 @@ class LobbyServiceLeaveFlowTest {
         verify(sessionManager).sendMessage(eq("session-1"), argThat(message ->
                 message.getType() == MessageType.LOBBY_CLOSED
                         && "Du hast die Lobby verlassen.".equals(message.getData().get("reason"))));
+    }
+
+    @Test
+    void leaveLobby_activeGameRemovesPlayerFromGameService() {
+        Lobby lobby = lobbyService.createLobby(1L, "Match", null, 4);
+        lobbyService.joinLobby(2L, lobby.getId(), null);
+        lobby.setStatus(Lobby.LobbyStatus.IN_GAME);
+
+        lobbyService.leaveLobby(2L);
+
+        verify(gameService).handlePlayerLeave(lobby.getId(), 2L);
+    }
+
+    @Test
+    void leaveLobby_lastPlayerInActiveGameAlsoCancelsOrphanedGame() {
+        Lobby lobby = lobbyService.createLobby(1L, "Solo", null, 4);
+        lobby.setStatus(Lobby.LobbyStatus.IN_GAME);
+
+        lobbyService.leaveLobby(1L);
+
+        verify(gameService).handlePlayerLeave(lobby.getId(), 1L);
+        verify(gameService).cancelActiveGame(lobby.getId());
     }
 }

@@ -362,6 +362,50 @@ class GameServiceTest {
                         && lobby.getId().equals(message.getData().get("lobbyId"))));
     }
 
+    @Test
+    void handlePlayerLeave_removesRobotAndContinuesWithRemainingSubmissionState() {
+        GameState game = startTestGame();
+        game.markSubmitted(1L);
+        when(userService.getSessionIdByUserId(1L)).thenReturn("session-1");
+
+        gameService.handlePlayerLeave(lobby.getId(), 2L);
+
+        assertNull(game.getRobot(2L));
+        assertEquals(1, game.getRobots().size());
+        assertNull(gameService.getGame(lobby.getId()));
+        assertEquals(Lobby.LobbyStatus.WAITING, lobby.getStatus());
+        verify(sessionManager, atLeastOnce()).sendToSession(anyString(), argThat(message ->
+                message.getType() == MessageType.GAME_OVER
+                        && lobby.getId().equals(message.getData().get("lobbyId"))));
+    }
+
+    @Test
+    void handlePlayerLeave_programmingPhaseReevaluatesRemainingSubmissions() {
+        lobby.addPlayer(3L);
+        when(lobbyService.getLobbyIdByUserId(3L)).thenReturn(lobby.getId());
+
+        GameState game = startTestGame();
+        game.markSubmitted(1L);
+        game.markSubmitted(2L);
+
+        clearInvocations(movementService, sessionManager);
+
+        gameService.handlePlayerLeave(lobby.getId(), 3L);
+
+        assertNull(game.getRobot(3L));
+        assertEquals(2, game.getRobots().size());
+        verify(movementService, times(5)).executeStep(any(), anyInt());
+    }
+
+    @Test
+    void cancelActiveGame_removesRunningGame() {
+        startTestGame();
+
+        gameService.cancelActiveGame(lobby.getId());
+
+        assertNull(gameService.getGame(lobby.getId()));
+    }
+
     // ═══════════════════════════════════════
     // Queries
     // ═══════════════════════════════════════
