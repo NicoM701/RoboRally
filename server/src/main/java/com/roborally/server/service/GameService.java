@@ -156,19 +156,24 @@ public class GameService {
         game.clearSubmissions();
 
         int timerSeconds = resolveProgrammingTimeoutSeconds(game);
-        Long deadlineEpochMs = timerEnabled
-                ? System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(timerSeconds)
-                : null;
-        if (deadlineEpochMs != null) {
-            programmingDeadlines.put(game.getLobbyId(), deadlineEpochMs);
-        } else {
-            programmingDeadlines.remove(game.getLobbyId());
-        }
 
         // Deal cards to each active robot
         for (Robot robot : game.getActiveRobots()) {
             List<ProgramCard> hand = cardService.deal(game.getDeck(), game.getDiscardPile(), robot);
             game.getPlayerHands().put(robot.getPlayerId(), hand);
+        }
+
+        // Move to programming phase and start the real timer before broadcasting
+        game.setPhase(GamePhase.PROGRAMMING);
+        Long deadlineEpochMs = timerEnabled
+                ? startProgrammingTimer(game, timerSeconds)
+                : null;
+        if (!timerEnabled) {
+            cancelTimer(game.getLobbyId());
+        }
+
+        for (Robot robot : game.getActiveRobots()) {
+            List<ProgramCard> hand = game.getHand(robot.getPlayerId());
 
             // Send hand to player
             String sessionId = userService.getSessionIdByUserId(robot.getPlayerId());
@@ -196,15 +201,8 @@ public class GameService {
             }
         }
 
-        // Move to programming phase
-        game.setPhase(GamePhase.PROGRAMMING);
         broadcastProgrammingPhaseStart(game, timerEnabled, timerSeconds, deadlineEpochMs, null, null);
         broadcastPhaseUpdate(game, "PROGRAMMING");
-
-        // Start programming timer
-        if (timerEnabled) {
-            startProgrammingTimer(game, timerSeconds);
-        }
 
         log.info("Round {} started - cards dealt to {} players", game.getRound(), game.getActiveRobots().size());
     }
@@ -433,10 +431,10 @@ public class GameService {
     // Timer
     // ══════════════════════════════════════════════════════
 
-    private void startProgrammingTimer(GameState game, int timeoutSeconds) {
+    private Long startProgrammingTimer(GameState game, int timeoutSeconds) {
         cancelTimer(game.getLobbyId());
-        programmingDeadlines.put(game.getLobbyId(),
-                System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(timeoutSeconds));
+        Long deadlineEpochMs = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(timeoutSeconds);
+        programmingDeadlines.put(game.getLobbyId(), deadlineEpochMs);
         ScheduledFuture<?> timer = scheduler.schedule(() -> {
             synchronized (game) {
                 log.info("Programming timer expired for lobby {}", game.getLobbyId());
@@ -447,6 +445,7 @@ public class GameService {
             }
         }, timeoutSeconds, TimeUnit.SECONDS);
         timers.put(game.getLobbyId(), timer);
+        return deadlineEpochMs;
     }
 
     private int resolveProgrammingTimeoutSeconds(GameState game) {

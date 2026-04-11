@@ -12,6 +12,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.*;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.lang.reflect.Field;
 import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -447,8 +448,49 @@ class GameServiceTest {
         assertTrue((Boolean) cardsDealt.get("timerEnabled"));
         assertNotNull(cardsDealt.get("deadlineEpochMs"));
         assertEquals(Integer.valueOf(75), phaseStart.get("timerSeconds"));
+        assertEquals(cardsDealt.get("deadlineEpochMs"), phaseStart.get("deadlineEpochMs"));
         assertEquals(Integer.valueOf(0), phaseStart.get("submittedCount"));
         assertEquals(Integer.valueOf(2), phaseStart.get("totalPlayers"));
+    }
+
+    @Test
+    void startGame_programmingMessagesUseScheduledDeadline() {
+        lobby.getGameSettings().put("timerEnabled", true);
+        lobby.getGameSettings().put("timerSeconds", 75);
+        when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
+        when(lobbyService.getLobbyById(lobby.getId())).thenReturn(lobby);
+        Board board = new Board("test", 12, 12);
+        board.addStartPosition(1, 11);
+        board.addStartPosition(2, 11);
+        board.setTotalCheckpoints(3);
+        when(boardLoader.loadBoard(anyString())).thenReturn(board);
+        when(cardService.createDeck()).thenReturn(createMockDeck());
+        when(cardService.deal(any(), any(), any())).thenReturn(createMockHand());
+        when(userService.getSessionIdByUserId(1L)).thenReturn("session-1");
+        when(userService.getSessionIdByUserId(2L)).thenReturn("session-2");
+        lenient().when(movementService.executeStep(any(), anyInt())).thenReturn(List.of());
+        doAnswer(invocation -> {
+            try {
+                Thread.sleep(20L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(e);
+            }
+            return null;
+        }).when(sessionManager).sendToSession(anyString(), any(Message.class));
+
+        gameService.startGame(1L);
+
+        ArgumentCaptor<Message> messageCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(sessionManager, atLeastOnce()).sendToSession(anyString(), messageCaptor.capture());
+
+        Message phaseStart = messageCaptor.getAllValues().stream()
+                .filter(message -> message.getType() == MessageType.PROGRAMMING_PHASE_START)
+                .findFirst()
+                .orElseThrow();
+
+        Long broadcastDeadlineEpochMs = ((Number) phaseStart.get("deadlineEpochMs")).longValue();
+        assertEquals(broadcastDeadlineEpochMs, getProgrammingDeadline(lobby.getId()));
     }
 
     @Test
@@ -545,5 +587,17 @@ class GameServiceTest {
         hand.add(new ProgramCard(8, CardType.MOVE_1, 800));
         hand.add(new ProgramCard(9, CardType.MOVE_1, 900));
         return hand;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Long getProgrammingDeadline(String lobbyId) {
+        try {
+            Field field = GameService.class.getDeclaredField("programmingDeadlines");
+            field.setAccessible(true);
+            Map<String, Long> deadlines = (Map<String, Long>) field.get(gameService);
+            return deadlines.get(lobbyId);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
     }
 }

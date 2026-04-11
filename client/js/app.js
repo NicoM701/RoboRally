@@ -796,8 +796,16 @@ const App = (() => {
             round: null,
             currentStep: 0,
             currentSummary: '',
-            pendingGameOver: null
+            pendingGameOver: null,
+            timerId: null
         };
+    }
+
+    function clearExecutionPlaybackTimer() {
+        if (executionPlayback?.timerId) {
+            window.clearTimeout(executionPlayback.timerId);
+            executionPlayback.timerId = null;
+        }
     }
 
     function startGameUiLoop() {
@@ -811,6 +819,7 @@ const App = (() => {
     }
 
     function resetGamePresentation() {
+        clearExecutionPlaybackTimer();
         gameState = null;
         dealtCards = [];
         selectedCards = [];
@@ -1208,10 +1217,12 @@ const App = (() => {
         renderGameInfo();
         pushGameEvent(`Register ${nextStep.step}: ${nextStep.summary}`, 'exec');
 
-        window.setTimeout(processExecutionQueue, getExecutionStepDelay(nextStep));
+        clearExecutionPlaybackTimer();
+        executionPlayback.timerId = window.setTimeout(processExecutionQueue, getExecutionStepDelay(nextStep));
     }
 
     function finishExecutionPlayback() {
+        clearExecutionPlaybackTimer();
         executionPlayback.isPlaying = false;
         executionPlayback.currentStep = 0;
         executionPlayback.currentSummary = '';
