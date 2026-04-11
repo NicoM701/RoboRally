@@ -84,6 +84,7 @@ public class GameService {
         }
         game.setBoard(board);
 
+        // Ensure the selected board can safely spawn all current players.
         List<int[]> starts = board.getStartPositions();
         List<Long> players = lobby.getPlayerIds();
         if (starts.size() < players.size()) {

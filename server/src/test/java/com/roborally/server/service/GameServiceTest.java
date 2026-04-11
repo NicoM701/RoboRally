@@ -95,6 +95,19 @@ class GameServiceTest {
     }
 
     @Test
+    void startGame_tooManyPlayersForBoard_throws() {
+        lobby.addPlayer(3L);
+        when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
+        Board board = new Board("test", 12, 12);
+        board.addStartPosition(1, 11);
+        board.addStartPosition(2, 11);
+        board.setTotalCheckpoints(3);
+        when(boardLoader.loadBoard(anyString())).thenReturn(board);
+
+        assertThrows(IllegalArgumentException.class, () -> gameService.startGame(1L));
+    }
+
+    @Test
     void startGame_success_createsGameAndDeals() {
         when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
         Board board = new Board("test", 12, 12);
