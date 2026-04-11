@@ -144,7 +144,6 @@ public class UserService {
         }
 
         if (lobbyService.getLobbyByUserId(userId) != null) {
-            gameService.handlePlayerDeparture(userId);
             lobbyService.leaveLobby(userId);
         }
 

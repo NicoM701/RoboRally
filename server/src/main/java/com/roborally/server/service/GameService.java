@@ -532,10 +532,21 @@ public class GameService {
             return;
         }
 
-        GameState game = games.get(lobby.getId());
+        abortActiveGameForLobbyDeparture(lobby.getId(), playerId);
+    }
+
+    public void abortActiveGameForLobbyDeparture(String lobbyId, Long playerId) {
+        if (lobbyId == null) {
+            return;
+        }
+
+        GameState game = games.get(lobbyId);
         if (game == null) {
             return;
         }
+
+        Lobby lobby = lobbyService.getLobbyById(lobbyId);
+        String lobbyName = lobby != null ? lobby.getName() : lobbyId;
 
         synchronized (game) {
             if (!isGameActive(game)) {
@@ -543,7 +554,7 @@ public class GameService {
             }
 
             log.info("Player {} left active game in lobby '{}'; aborting game and cleaning up runtime resources",
-                    playerId, lobby.getName());
+                    playerId, lobbyName);
             broadcastToGame(game, Message.error("Spiel beendet: Ein Spieler hat die Lobby verlassen."));
             cleanupGame(game);
         }

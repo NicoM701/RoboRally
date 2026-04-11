@@ -132,25 +132,34 @@ public class LobbyService {
         }
 
         String username = getUsernameById(userId);
-        
+        boolean closeLobby = false;
+
         synchronized (lobby) {
+            if (!lobby.containsPlayer(userId)) {
+                userLobbyMap.remove(userId);
+                return;
+            }
+
             lobby.removePlayer(userId);
             userLobbyMap.remove(userId);
-        }
 
-        log.info("User {} left lobby '{}'", username, lobby.getName());
+            gameService.abortActiveGameForLobbyDeparture(lobbyId, userId);
 
-        if (lobby.getPlayerCount() == 0) {
-            // Last player left → close lobby
-            closeLobby(lobbyId);
-        } else {
-            // Transfer host if host left
-            if (lobby.isHost(userId)) {
+            if (lobby.getPlayerCount() == 0) {
+                closeLobby = true;
+            } else if (lobby.isHost(userId)) {
                 Long newHost = lobby.getPlayerIds().get(0);
                 lobby.setHostUserId(newHost);
                 log.info("Host transferred to user {} in lobby '{}'", getUsernameById(newHost), lobby.getName());
             }
+        }
 
+        log.info("User {} left lobby '{}'", username, lobby.getName());
+
+        if (closeLobby) {
+            // Last player left → close lobby
+            closeLobby(lobbyId);
+        } else {
             broadcastToLobby(lobby, Message.of(MessageType.PLAYER_LEFT, Map.of(
                     "userId", userId,
                     "username", username)));
@@ -179,9 +188,9 @@ public class LobbyService {
                 throw new IllegalArgumentException("Spieler ist nicht in dieser Lobby.");
             }
 
-            gameService.handlePlayerDeparture(targetUserId);
             lobby.removePlayer(targetUserId);
             userLobbyMap.remove(targetUserId);
+            gameService.abortActiveGameForLobbyDeparture(lobbyId, targetUserId);
         }
 
         String kickedName = getUsernameById(targetUserId);

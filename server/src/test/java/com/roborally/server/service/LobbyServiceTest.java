@@ -203,6 +203,24 @@ class LobbyServiceTest {
         assertNull(lobbyService.getLobbyById(lobbyId));
     }
 
+    @Test
+    @DisplayName("Leave: during active game → player removed before lobby returns to waiting")
+    void leaveLobby_activeGame_abortsAndRemovesPlayer() {
+        Lobby lobby = lobbyService.createLobby(hostId, "Test", null, 4);
+        lobbyService.joinLobby(player2Id, lobby.getId(), null);
+        GameState game = gameService.startGame(hostId);
+
+        lobbyService.leaveLobby(player2Id);
+
+        assertNull(gameService.getGame(lobby.getId()));
+        assertFalse(game.isActive());
+        assertEquals(Lobby.LobbyStatus.WAITING, lobby.getStatus());
+        assertTrue(game.getPlayerHands().isEmpty());
+        assertTrue(game.getDeck().isEmpty());
+        assertFalse(lobby.containsPlayer(player2Id));
+        assertEquals(1, lobby.getPlayerCount());
+    }
+
     // ─── Kick Player ────────────────────────────────────
 
     @Test

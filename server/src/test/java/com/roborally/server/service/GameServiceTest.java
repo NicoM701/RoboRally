@@ -422,7 +422,8 @@ class GameServiceTest {
     void handlePlayerDeparture_activeGame_abortsAndCleansUp() {
         GameState game = startTestGame();
         when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
-        when(userService.getSessionIdByUserId(anyLong())).thenReturn("session-1");
+        when(userService.getSessionIdByUserId(1L)).thenReturn("session-1");
+        when(userService.getSessionIdByUserId(2L)).thenReturn("session-2");
         when(lobbyService.getLobbyById(lobby.getId())).thenReturn(lobby);
 
         gameService.handlePlayerDeparture(1L);
@@ -432,6 +433,8 @@ class GameServiceTest {
         assertEquals(Lobby.LobbyStatus.WAITING, lobby.getStatus());
         assertTrue(game.getPlayerHands().isEmpty());
         assertTrue(game.getDeck().isEmpty());
+        verify(sessionManager).sendToSession(eq("session-1"), argThat(m -> m.getType() == com.roborally.common.enums.MessageType.ERROR));
+        verify(sessionManager).sendToSession(eq("session-2"), argThat(m -> m.getType() == com.roborally.common.enums.MessageType.ERROR));
     }
 
     @Test
