@@ -272,7 +272,9 @@ public class GameService {
         if (sessionId != null) {
             sessionManager.sendToSession(sessionId, Message.of(MessageType.PROGRAMMING_PHASE_START, Map.of(
                     "status", "submitted",
-                    "message", "Programm eingereicht!")));
+                    "message", "Programm eingereicht!",
+                    "lobbyId", game.getLobbyId(),
+                    "gameInstanceId", game.getGameInstanceId())));
         }
         broadcastProgrammingProgress(game, playerId);
 

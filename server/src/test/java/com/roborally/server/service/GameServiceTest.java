@@ -619,6 +619,8 @@ class GameServiceTest {
                 .orElseThrow();
 
         assertEquals("submitted", selfAck.get("status"));
+        assertEquals(lobby.getId(), selfAck.get("lobbyId"));
+        assertEquals(game.getGameInstanceId(), selfAck.get("gameInstanceId"));
         assertEquals(Integer.valueOf(1), teamProgress.get("submittedCount"));
         assertEquals(Integer.valueOf(2), teamProgress.get("totalPlayers"));
         assertEquals(Long.valueOf(1L), teamProgress.get("submittedPlayerId"));
