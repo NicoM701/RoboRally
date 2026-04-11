@@ -188,6 +188,8 @@ public class GameService {
                 }).toList();
 
                 Map<String, Object> dealtPayload = new LinkedHashMap<>();
+                dealtPayload.put("lobbyId", game.getLobbyId());
+                dealtPayload.put("gameInstanceId", game.getGameInstanceId());
                 dealtPayload.put("cards", handData);
                 dealtPayload.put("blockedSlots", robot.getBlockedSlots());
                 dealtPayload.put("round", game.getRound());
@@ -304,11 +306,11 @@ public class GameService {
             checkCheckpoints(game);
 
             // Broadcast step result for client animation
-            broadcastToGame(game, Message.of(MessageType.EXECUTION_STEP, Map.of(
+            broadcastToGame(game, Message.of(MessageType.EXECUTION_STEP, createGamePayload(game, Map.of(
                     "round", game.getRound(),
                     "step", step + 1,
                     "results", stepResults,
-                    "robots", getRobotStates(game))));
+                    "robots", getRobotStates(game)))));
 
             // Check for game over immediately after evaluating checkpoints
             for (Robot robot : game.getRobots().values()) {
@@ -401,8 +403,8 @@ public class GameService {
         String winnerName = userService.getUserById(winnerId)
                 .map(u -> u.getUsername()).orElse("???");
 
-        broadcastToGame(game, Message.of(MessageType.GAME_OVER, Map.of(
-                "winners", List.of(Map.of("userId", winnerId, "username", winnerName)))));
+        broadcastToGame(game, Message.of(MessageType.GAME_OVER, createGamePayload(game, Map.of(
+                "winners", List.of(Map.of("userId", winnerId, "username", winnerName))))));
 
         log.info("Game over! Winner: {} (ID: {})", winnerName, winnerId);
         cleanupGame(game);
@@ -412,8 +414,8 @@ public class GameService {
         game.setPhase(GamePhase.GAME_OVER);
         cancelTimer(game.getLobbyId());
 
-        broadcastToGame(game, Message.of(MessageType.GAME_OVER, Map.of(
-                "winners", List.of())));
+        broadcastToGame(game, Message.of(MessageType.GAME_OVER, createGamePayload(game, Map.of(
+                "winners", List.of()))));
 
         log.info("Game over! All robots destroyed — draw.");
         cleanupGame(game);
@@ -465,6 +467,8 @@ public class GameService {
     private void broadcastProgrammingPhaseStart(GameState game, boolean timerEnabled, int timerSeconds,
             Long deadlineEpochMs, Long submittedPlayerId, String submittedUsername) {
         Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("lobbyId", game.getLobbyId());
+        payload.put("gameInstanceId", game.getGameInstanceId());
         payload.put("status", submittedPlayerId == null ? "started" : "progress");
         payload.put("phase", "PROGRAMMING");
         payload.put("round", game.getRound());
@@ -545,8 +549,16 @@ public class GameService {
     }
 
     private void broadcastPhaseUpdate(GameState game, String phase) {
-        broadcastToGame(game, Message.of(MessageType.GAME_STATE, Map.of(
-                "phase", phase, "round", game.getRound())));
+        broadcastToGame(game, Message.of(MessageType.GAME_STATE, createGamePayload(game, Map.of(
+                "phase", phase, "round", game.getRound()))));
+    }
+
+    private Map<String, Object> createGamePayload(GameState game, Map<String, Object> payload) {
+        Map<String, Object> message = new LinkedHashMap<>();
+        message.put("lobbyId", game.getLobbyId());
+        message.put("gameInstanceId", game.getGameInstanceId());
+        message.putAll(payload);
+        return message;
     }
 
     private void broadcastToGame(GameState game, Message message) {

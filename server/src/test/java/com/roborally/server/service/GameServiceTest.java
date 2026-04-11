@@ -130,6 +130,52 @@ class GameServiceTest {
     }
 
     @Test
+    void startGame_broadcastsScopedContextOnInitialGameMessages() {
+        when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
+        when(lobbyService.getLobbyById(lobby.getId())).thenReturn(lobby);
+        Board board = new Board("test", 12, 12);
+        board.addStartPosition(1, 11);
+        board.addStartPosition(2, 11);
+        board.setTotalCheckpoints(3);
+        when(boardLoader.loadBoard(anyString())).thenReturn(board);
+        when(cardService.createDeck()).thenReturn(createMockDeck());
+        when(cardService.deal(any(), any(), any())).thenReturn(createMockHand());
+        when(userService.getSessionIdByUserId(1L)).thenReturn("session-1");
+        when(userService.getSessionIdByUserId(2L)).thenReturn("session-2");
+        lenient().when(movementService.executeStep(any(), anyInt())).thenReturn(List.of());
+
+        GameState game = gameService.startGame(1L);
+
+        ArgumentCaptor<Message> messageCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(sessionManager, atLeastOnce()).sendToSession(anyString(), messageCaptor.capture());
+
+        List<Message> gameStateMessages = messageCaptor.getAllValues().stream()
+                .filter(message -> message.getType() == MessageType.GAME_STATE)
+                .toList();
+        Message cardsDealt = messageCaptor.getAllValues().stream()
+                .filter(message -> message.getType() == MessageType.CARDS_DEALT)
+                .findFirst()
+                .orElseThrow();
+        Message phaseStart = messageCaptor.getAllValues().stream()
+                .filter(message -> message.getType() == MessageType.PROGRAMMING_PHASE_START)
+                .findFirst()
+                .orElseThrow();
+        Message phaseOnlyUpdate = gameStateMessages.stream()
+                .filter(message -> message.get("board") == null)
+                .findFirst()
+                .orElseThrow();
+
+        assertFalse(gameStateMessages.isEmpty());
+        assertEquals(lobby.getId(), phaseOnlyUpdate.get("lobbyId"));
+        assertEquals(game.getGameInstanceId(), phaseOnlyUpdate.get("gameInstanceId"));
+        assertEquals("PROGRAMMING", phaseOnlyUpdate.get("phase"));
+        assertEquals(lobby.getId(), cardsDealt.get("lobbyId"));
+        assertEquals(game.getGameInstanceId(), cardsDealt.get("gameInstanceId"));
+        assertEquals(lobby.getId(), phaseStart.get("lobbyId"));
+        assertEquals(game.getGameInstanceId(), phaseStart.get("gameInstanceId"));
+    }
+
+    @Test
     void startGame_missingCheckpoints_defaultsToBoardTotal() {
         when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
         Board board = new Board("test", 12, 12);
@@ -298,6 +344,50 @@ class GameServiceTest {
         // After all submitted, execution should complete and next round starts
         assertTrue(game.getRound() >= 1);
         verify(movementService, times(5)).executeStep(any(), anyInt());
+    }
+
+    @Test
+    void executionAndGameOverMessagesIncludeScopedContext() {
+        when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
+        when(lobbyService.getLobbyById(lobby.getId())).thenReturn(lobby);
+        Board board = new Board("test", 12, 12);
+        board.addStartPosition(1, 11);
+        board.addStartPosition(2, 11);
+        board.setTotalCheckpoints(3);
+        when(boardLoader.loadBoard(anyString())).thenReturn(board);
+        when(cardService.createDeck()).thenReturn(createMockDeck());
+        when(cardService.deal(any(), any(), any())).thenReturn(createMockHand());
+        when(cardService.validateProgram(any(), any(), any(), anyInt())).thenReturn(null);
+        when(userService.getSessionIdByUserId(1L)).thenReturn("session-1");
+        when(userService.getSessionIdByUserId(2L)).thenReturn("session-2");
+        when(movementService.executeStep(any(), anyInt())).thenReturn(List.of());
+
+        GameState game = gameService.startGame(1L);
+        game.getBoard().setTotalCheckpoints(0);
+        game.markSubmitted(2L);
+        Robot otherRobot = game.getRobot(2L);
+        for (int i = 0; i < 5; i++) {
+            otherRobot.setSlot(i, new ProgramCard(20 + i, CardType.MOVE_1, 100 + i));
+        }
+
+        gameService.submitProgram(1L, List.of(1, 2, 3, 4, 5));
+
+        ArgumentCaptor<Message> messageCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(sessionManager, atLeastOnce()).sendToSession(anyString(), messageCaptor.capture());
+
+        Message executionStep = messageCaptor.getAllValues().stream()
+                .filter(message -> message.getType() == MessageType.EXECUTION_STEP)
+                .findFirst()
+                .orElseThrow();
+        Message gameOver = messageCaptor.getAllValues().stream()
+                .filter(message -> message.getType() == MessageType.GAME_OVER)
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(lobby.getId(), executionStep.get("lobbyId"));
+        assertEquals(game.getGameInstanceId(), executionStep.get("gameInstanceId"));
+        assertEquals(lobby.getId(), gameOver.get("lobbyId"));
+        assertEquals(game.getGameInstanceId(), gameOver.get("gameInstanceId"));
     }
 
     // ═══════════════════════════════════════

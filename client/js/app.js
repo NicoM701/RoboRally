@@ -402,10 +402,18 @@ const App = (() => {
         });
 
         RoboSocket.on('CARDS_DEALT', (data) => {
+            if (!shouldAcceptCurrentGameMessage(data)) {
+                return;
+            }
+
             applyDealtCards(data);
         });
 
         RoboSocket.on('PROGRAMMING_PHASE_START', (data) => {
+            if (!shouldAcceptCurrentGameMessage(data)) {
+                return;
+            }
+
             if (data.status === 'submitted') {
                 confirmProgramSubmission();
                 toast(data.message || 'Programm eingereicht!', 'success');
@@ -425,7 +433,7 @@ const App = (() => {
         });
 
         RoboSocket.on('GAME_OVER', (data) => {
-            if (!shouldAcceptGameOver()) {
+            if (!shouldAcceptGameOver(data)) {
                 return;
             }
 
@@ -793,6 +801,16 @@ const App = (() => {
         };
     }
 
+    function resetMatchPresentationState() {
+        dealtCards = [];
+        selectedCards = [];
+        blockedSlots = 0;
+        submittedProgramPreview = [];
+        gameEventLog = [];
+        programmingState = createProgrammingState();
+        executionPlayback = createExecutionPlaybackState();
+    }
+
     function clearExecutionPlaybackTimer() {
         if (executionPlayback?.timerId) {
             window.clearTimeout(executionPlayback.timerId);
@@ -813,18 +831,16 @@ const App = (() => {
     function resetGamePresentation() {
         clearExecutionPlaybackTimer();
         gameState = null;
-        dealtCards = [];
-        selectedCards = [];
-        blockedSlots = 0;
-        submittedProgramPreview = [];
-        gameEventLog = [];
-        programmingState = createProgrammingState();
-        executionPlayback = createExecutionPlaybackState();
+        resetMatchPresentationState();
     }
 
     function applyIncomingGameState(data) {
-        if (!gameState) {
-            gameState = data;
+        const isNewGameInstance = !gameState?.gameInstanceId || data?.gameInstanceId !== gameState.gameInstanceId;
+
+        if (isNewGameInstance) {
+            clearExecutionPlaybackTimer();
+            resetMatchPresentationState();
+            gameState = { ...data };
         } else {
             Object.assign(gameState, data);
         }
@@ -850,12 +866,32 @@ const App = (() => {
         return Boolean(currentUser && currentLobby && gameState && currentScreen === 'game');
     }
 
+    function hasCompleteGameMessageContext(data) {
+        return Boolean(currentLobby?.id && data?.lobbyId && data?.gameInstanceId);
+    }
+
     function hasMatchingGameStateLobby(data) {
-        if (!currentLobby?.id || !data?.lobbyId) {
-            return true;
+        if (!hasCompleteGameMessageContext(data)) {
+            return false;
         }
 
         return data.lobbyId === currentLobby.id;
+    }
+
+    function hasMatchingCurrentGameInstance(data) {
+        return Boolean(
+            hasMatchingGameStateLobby(data)
+            && gameState?.gameInstanceId
+            && data.gameInstanceId === gameState.gameInstanceId
+        );
+    }
+
+    function shouldAcceptCurrentGameMessage(data) {
+        return hasActiveGamePresentation() && hasMatchingCurrentGameInstance(data);
+    }
+
+    function isFullGameStateSnapshot(data) {
+        return Boolean(data?.board && Array.isArray(data?.robots));
     }
 
     function shouldAcceptGameState(data) {
@@ -863,8 +899,16 @@ const App = (() => {
             return false;
         }
 
-        if (!gameState || currentScreen === 'end' || gameState?.phase === 'GAME_OVER') {
-            return true;
+        if (!gameState) {
+            return isFullGameStateSnapshot(data);
+        }
+
+        if (currentScreen === 'end' || gameState?.phase === 'GAME_OVER') {
+            return data.gameInstanceId !== gameState.gameInstanceId && isFullGameStateSnapshot(data);
+        }
+
+        if (!hasMatchingCurrentGameInstance(data)) {
+            return false;
         }
 
         return hasMatchingExecutionRobots(data?.robots);
@@ -886,7 +930,7 @@ const App = (() => {
     }
 
     function shouldAcceptExecutionStep(data) {
-        if (!hasActiveGamePresentation()) {
+        if (!shouldAcceptCurrentGameMessage(data)) {
             return false;
         }
 
@@ -909,7 +953,11 @@ const App = (() => {
         return true;
     }
 
-    function shouldAcceptGameOver() {
+    function shouldAcceptGameOver(data) {
+        if (!hasMatchingCurrentGameInstance(data)) {
+            return false;
+        }
+
         if (executionPlayback.isPlaying || executionPlayback.queue.length > 0) {
             return true;
         }

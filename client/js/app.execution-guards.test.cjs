@@ -62,6 +62,25 @@ function loadAppHooks() {
     return sandbox.__APP__.__testHooks;
 }
 
+function activeGameState(overrides = {}) {
+    return {
+        lobbyId: 'fresh-lobby',
+        gameInstanceId: 'game-1',
+        phase: 'PROGRAMMING',
+        round: 2,
+        robots: [{ playerId: 1 }, { playerId: 2 }],
+        ...overrides
+    };
+}
+
+function gameMessage(overrides = {}) {
+    return {
+        lobbyId: 'fresh-lobby',
+        gameInstanceId: 'game-1',
+        ...overrides
+    };
+}
+
 test('late execution steps are ignored after reset removes the active game context', () => {
     const hooks = loadAppHooks();
 
@@ -115,11 +134,28 @@ test('game state messages are accepted when the user still has an active lobby c
         executionPlayback: { queue: [], isPlaying: false }
     });
 
-    assert.equal(hooks.shouldAcceptGameState({
-        lobbyId: 'fresh-lobby',
+    assert.equal(hooks.shouldAcceptGameState(gameMessage({
         phase: 'PROGRAMMING',
+        board: { width: 12, height: 12 },
         robots: [{ playerId: 1 }, { playerId: 2 }]
-    }), true);
+    })), true);
+});
+
+test('phase-only game state updates without full context are rejected', () => {
+    const hooks = loadAppHooks();
+
+    hooks.setState({
+        currentUser: { userId: 1, username: 'Nico' },
+        currentLobby: { id: 'fresh-lobby' },
+        currentScreen: 'game',
+        gameState: activeGameState(),
+        executionPlayback: { queue: [], isPlaying: false }
+    });
+
+    assert.equal(hooks.shouldAcceptGameState({
+        phase: 'EXECUTING',
+        round: 2
+    }), false);
 });
 
 test('game state messages are rejected when they target a different lobby than the current lobby', () => {
@@ -133,11 +169,12 @@ test('game state messages are rejected when they target a different lobby than t
         executionPlayback: { queue: [], isPlaying: false }
     });
 
-    assert.equal(hooks.shouldAcceptGameState({
+    assert.equal(hooks.shouldAcceptGameState(gameMessage({
         lobbyId: 'stale-lobby',
         phase: 'PROGRAMMING',
+        board: { width: 12, height: 12 },
         robots: [{ playerId: 1 }, { playerId: 2 }]
-    }), false);
+    })), false);
 });
 
 test('mismatched robot rosters are rejected as stale game state updates for an active game', () => {
@@ -147,20 +184,15 @@ test('mismatched robot rosters are rejected as stale game state updates for an a
         currentUser: { userId: 1, username: 'Nico' },
         currentLobby: { id: 'fresh-lobby' },
         currentScreen: 'game',
-        gameState: {
-            phase: 'PROGRAMMING',
-            round: 2,
-            robots: [{ playerId: 1 }, { playerId: 2 }]
-        },
+        gameState: activeGameState(),
         executionPlayback: { queue: [], isPlaying: false }
     });
 
-    assert.equal(hooks.shouldAcceptGameState({
-        lobbyId: 'fresh-lobby',
+    assert.equal(hooks.shouldAcceptGameState(gameMessage({
         phase: 'PROGRAMMING',
         round: 2,
         robots: [{ playerId: 1 }, { playerId: 3 }]
-    }), false);
+    })), false);
 });
 
 test('fresh rematch game state is accepted after game over even when the roster changed', () => {
@@ -170,20 +202,45 @@ test('fresh rematch game state is accepted after game over even when the roster 
         currentUser: { userId: 1, username: 'Nico' },
         currentLobby: { id: 'fresh-lobby' },
         currentScreen: 'end',
-        gameState: {
+        gameState: activeGameState({
+            gameInstanceId: 'game-old',
             phase: 'GAME_OVER',
-            round: 4,
-            robots: [{ playerId: 1 }, { playerId: 2 }]
-        },
+            round: 4
+        }),
         executionPlayback: { queue: [], isPlaying: false }
     });
 
-    assert.equal(hooks.shouldAcceptGameState({
-        lobbyId: 'fresh-lobby',
+    assert.equal(hooks.shouldAcceptGameState(gameMessage({
+        gameInstanceId: 'game-new',
         phase: 'PROGRAMMING',
         round: 1,
+        board: { width: 12, height: 12 },
         robots: [{ playerId: 1 }, { playerId: 3 }]
-    }), true);
+    })), true);
+});
+
+test('stale game state from the finished match is rejected on the end screen', () => {
+    const hooks = loadAppHooks();
+
+    hooks.setState({
+        currentUser: { userId: 1, username: 'Nico' },
+        currentLobby: { id: 'fresh-lobby' },
+        currentScreen: 'end',
+        gameState: activeGameState({
+            gameInstanceId: 'game-old',
+            phase: 'GAME_OVER',
+            round: 4
+        }),
+        executionPlayback: { queue: [], isPlaying: false }
+    });
+
+    assert.equal(hooks.shouldAcceptGameState(gameMessage({
+        gameInstanceId: 'game-old',
+        phase: 'ROUND_CLEANUP',
+        round: 4,
+        board: { width: 12, height: 12 },
+        robots: [{ playerId: 1 }, { playerId: 2 }]
+    })), false);
 });
 
 test('execution steps are ignored when the current game is not in the execution phase yet', () => {
@@ -193,20 +250,16 @@ test('execution steps are ignored when the current game is not in the execution 
         currentUser: { userId: 1, username: 'Nico' },
         currentLobby: { id: 'fresh-lobby' },
         currentScreen: 'game',
-        gameState: {
-            phase: 'PROGRAMMING',
-            round: 1,
-            robots: [{ playerId: 1 }, { playerId: 2 }]
-        },
+        gameState: activeGameState({ phase: 'PROGRAMMING', round: 1 }),
         executionPlayback: { queue: [], isPlaying: false }
     });
 
-    assert.equal(hooks.shouldAcceptExecutionStep({
+    assert.equal(hooks.shouldAcceptExecutionStep(gameMessage({
         round: 1,
         step: 1,
         robots: [{ playerId: 1 }, { playerId: 2 }],
         results: []
-    }), false);
+    })), false);
 });
 
 test('execution steps are accepted for the active execution phase with matching round and roster', () => {
@@ -216,20 +269,36 @@ test('execution steps are accepted for the active execution phase with matching 
         currentUser: { userId: 1, username: 'Nico' },
         currentLobby: { id: 'fresh-lobby' },
         currentScreen: 'game',
-        gameState: {
-            phase: 'EXECUTING',
-            round: 2,
-            robots: [{ playerId: 1 }, { playerId: 2 }]
-        },
+        gameState: activeGameState({ phase: 'EXECUTING', round: 2 }),
         executionPlayback: { queue: [], isPlaying: false }
     });
 
-    assert.equal(hooks.shouldAcceptExecutionStep({
+    assert.equal(hooks.shouldAcceptExecutionStep(gameMessage({
         round: 2,
         step: 1,
         robots: [{ playerId: 1 }, { playerId: 2 }],
         results: []
-    }), true);
+    })), true);
+});
+
+test('execution steps with a stale game instance are rejected even if lobby, round, and roster match', () => {
+    const hooks = loadAppHooks();
+
+    hooks.setState({
+        currentUser: { userId: 1, username: 'Nico' },
+        currentLobby: { id: 'fresh-lobby' },
+        currentScreen: 'game',
+        gameState: activeGameState({ phase: 'EXECUTING', round: 2 }),
+        executionPlayback: { queue: [], isPlaying: false }
+    });
+
+    assert.equal(hooks.shouldAcceptExecutionStep(gameMessage({
+        gameInstanceId: 'game-old',
+        round: 2,
+        step: 1,
+        robots: [{ playerId: 1 }, { playerId: 2 }],
+        results: []
+    })), false);
 });
 
 test('mismatched robot rosters are rejected as stale execution steps', () => {
@@ -239,20 +308,16 @@ test('mismatched robot rosters are rejected as stale execution steps', () => {
         currentUser: { userId: 1, username: 'Nico' },
         currentLobby: { id: 'fresh-lobby' },
         currentScreen: 'game',
-        gameState: {
-            phase: 'EXECUTING',
-            round: 2,
-            robots: [{ playerId: 1 }, { playerId: 2 }]
-        },
+        gameState: activeGameState({ phase: 'EXECUTING', round: 2 }),
         executionPlayback: { queue: [], isPlaying: false }
     });
 
-    assert.equal(hooks.shouldAcceptExecutionStep({
+    assert.equal(hooks.shouldAcceptExecutionStep(gameMessage({
         round: 2,
         step: 1,
         robots: [{ playerId: 1 }, { playerId: 3 }],
         results: []
-    }), false);
+    })), false);
 });
 
 test('game over messages are ignored when there is no active game context or playback', () => {
@@ -266,7 +331,7 @@ test('game over messages are ignored when there is no active game context or pla
         executionPlayback: { queue: [], isPlaying: false }
     });
 
-    assert.equal(hooks.shouldAcceptGameOver(), false);
+    assert.equal(hooks.shouldAcceptGameOver(gameMessage()), false);
 });
 
 test('game over messages are ignored during unrelated non-terminal phases', () => {
@@ -276,15 +341,25 @@ test('game over messages are ignored during unrelated non-terminal phases', () =
         currentUser: { userId: 1, username: 'Nico' },
         currentLobby: { id: 'fresh-lobby' },
         currentScreen: 'game',
-        gameState: {
-            phase: 'PROGRAMMING',
-            round: 2,
-            robots: [{ playerId: 1 }, { playerId: 2 }]
-        },
+        gameState: activeGameState({ phase: 'PROGRAMMING', round: 2 }),
         executionPlayback: { queue: [], isPlaying: false }
     });
 
-    assert.equal(hooks.shouldAcceptGameOver(), false);
+    assert.equal(hooks.shouldAcceptGameOver(gameMessage()), false);
+});
+
+test('stale game over messages are rejected even if the lobby still matches', () => {
+    const hooks = loadAppHooks();
+
+    hooks.setState({
+        currentUser: { userId: 1, username: 'Nico' },
+        currentLobby: { id: 'fresh-lobby' },
+        currentScreen: 'game',
+        gameState: activeGameState({ phase: 'ROUND_CLEANUP', round: 2 }),
+        executionPlayback: { queue: [], isPlaying: false }
+    });
+
+    assert.equal(hooks.shouldAcceptGameOver(gameMessage({ gameInstanceId: 'game-old' })), false);
 });
 
 test('game over messages are still accepted during cleanup for the current game', () => {
@@ -294,13 +369,9 @@ test('game over messages are still accepted during cleanup for the current game'
         currentUser: { userId: 1, username: 'Nico' },
         currentLobby: { id: 'fresh-lobby' },
         currentScreen: 'game',
-        gameState: {
-            phase: 'ROUND_CLEANUP',
-            round: 2,
-            robots: [{ playerId: 1 }, { playerId: 2 }]
-        },
+        gameState: activeGameState({ phase: 'ROUND_CLEANUP', round: 2 }),
         executionPlayback: { queue: [], isPlaying: false }
     });
 
-    assert.equal(hooks.shouldAcceptGameOver(), true);
+    assert.equal(hooks.shouldAcceptGameOver(gameMessage()), true);
 });
