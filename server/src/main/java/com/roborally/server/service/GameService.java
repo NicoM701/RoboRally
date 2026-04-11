@@ -84,9 +84,14 @@ public class GameService {
         }
         game.setBoard(board);
 
-        // Initialize robots at start positions
         List<int[]> starts = board.getStartPositions();
         List<Long> players = lobby.getPlayerIds();
+        if (starts.size() < players.size()) {
+            throw new IllegalArgumentException(
+                    "Das gewählte Board unterstützt nur " + starts.size() + " Spieler, aber in der Lobby sind " + players.size() + ".");
+        }
+
+        // Initialize robots at start positions
         for (int i = 0; i < players.size(); i++) {
             Long playerId = players.get(i);
             int[] pos;

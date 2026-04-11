@@ -549,20 +549,15 @@ class GameServiceTest {
     }
 
     @Test
-    void startGame_insufficientStartPositions_usesDefaults() {
+    void startGame_insufficientStartPositions_throws() {
         when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
         Board board = new Board("test", 12, 12);
         // Only 1 start position for 2 players
         board.addStartPosition(1, 11);
         board.setTotalCheckpoints(3);
         when(boardLoader.loadBoard(anyString())).thenReturn(board);
-        when(cardService.createDeck()).thenReturn(createMockDeck());
-        lenient().when(userService.getSessionIdByUserId(anyLong())).thenReturn(null);
-        lenient().when(movementService.executeStep(any(), anyInt())).thenReturn(List.of());
-        when(cardService.deal(any(), any(), any())).thenReturn(createMockHand());
 
-        GameState game = gameService.startGame(1L);
-        assertEquals(2, game.getRobots().size());
+        assertThrows(IllegalArgumentException.class, () -> gameService.startGame(1L));
     }
 
     // ═══════════════════════════════════════
@@ -572,8 +567,9 @@ class GameServiceTest {
     private GameState startTestGame() {
         when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
         Board board = new Board("test", 12, 12);
-        board.addStartPosition(1, 11);
-        board.addStartPosition(2, 11);
+        for (int i = 0; i < lobby.getPlayerIds().size(); i++) {
+            board.addStartPosition(i + 1, 11);
+        }
         board.setTotalCheckpoints(3);
         when(boardLoader.loadBoard(anyString())).thenReturn(board);
         when(cardService.createDeck()).thenReturn(createMockDeck());
