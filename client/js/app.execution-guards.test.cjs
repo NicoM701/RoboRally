@@ -116,9 +116,28 @@ test('game state messages are accepted when the user still has an active lobby c
     });
 
     assert.equal(hooks.shouldAcceptGameState({
+        lobbyId: 'fresh-lobby',
         phase: 'PROGRAMMING',
         robots: [{ playerId: 1 }, { playerId: 2 }]
     }), true);
+});
+
+test('game state messages are rejected when they target a different lobby than the current lobby', () => {
+    const hooks = loadAppHooks();
+
+    hooks.setState({
+        currentUser: { userId: 1, username: 'Nico' },
+        currentLobby: { id: 'fresh-lobby', players: [{ userId: 1 }, { userId: 2 }] },
+        currentScreen: 'lobby',
+        gameState: null,
+        executionPlayback: { queue: [], isPlaying: false }
+    });
+
+    assert.equal(hooks.shouldAcceptGameState({
+        lobbyId: 'stale-lobby',
+        phase: 'PROGRAMMING',
+        robots: [{ playerId: 1 }, { playerId: 2 }]
+    }), false);
 });
 
 test('mismatched robot rosters are rejected as stale game state updates for an active game', () => {
@@ -137,10 +156,34 @@ test('mismatched robot rosters are rejected as stale game state updates for an a
     });
 
     assert.equal(hooks.shouldAcceptGameState({
+        lobbyId: 'fresh-lobby',
         phase: 'PROGRAMMING',
         round: 2,
         robots: [{ playerId: 1 }, { playerId: 3 }]
     }), false);
+});
+
+test('fresh rematch game state is accepted after game over even when the roster changed', () => {
+    const hooks = loadAppHooks();
+
+    hooks.setState({
+        currentUser: { userId: 1, username: 'Nico' },
+        currentLobby: { id: 'fresh-lobby' },
+        currentScreen: 'end',
+        gameState: {
+            phase: 'GAME_OVER',
+            round: 4,
+            robots: [{ playerId: 1 }, { playerId: 2 }]
+        },
+        executionPlayback: { queue: [], isPlaying: false }
+    });
+
+    assert.equal(hooks.shouldAcceptGameState({
+        lobbyId: 'fresh-lobby',
+        phase: 'PROGRAMMING',
+        round: 1,
+        robots: [{ playerId: 1 }, { playerId: 3 }]
+    }), true);
 });
 
 test('execution steps are ignored when the current game is not in the execution phase yet', () => {

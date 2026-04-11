@@ -850,12 +850,20 @@ const App = (() => {
         return Boolean(currentUser && currentLobby && gameState && currentScreen === 'game');
     }
 
+    function hasMatchingGameStateLobby(data) {
+        if (!currentLobby?.id || !data?.lobbyId) {
+            return true;
+        }
+
+        return data.lobbyId === currentLobby.id;
+    }
+
     function shouldAcceptGameState(data) {
-        if (!hasLobbyGameContext()) {
+        if (!hasLobbyGameContext() || !hasMatchingGameStateLobby(data)) {
             return false;
         }
 
-        if (!gameState) {
+        if (!gameState || currentScreen === 'end' || gameState?.phase === 'GAME_OVER') {
             return true;
         }
 
