@@ -70,6 +70,15 @@ class GameStateTest {
     }
 
     @Test
+    void removeRobot_removesTrackedRobot() {
+        Robot r = new Robot(1L, 0, 0, 0, Direction.NORTH);
+        game.addRobot(1L, r);
+
+        assertSame(r, game.removeRobot(1L));
+        assertNull(game.getRobot(1L));
+    }
+
+    @Test
     void getRobots_returnsAll() {
         game.addRobot(1L, new Robot(1L, 0, 0, 0, Direction.NORTH));
         game.addRobot(2L, new Robot(2L, 1, 1, 1, Direction.SOUTH));
@@ -150,6 +159,9 @@ class GameStateTest {
 
         game.markSubmitted(2L);
         assertTrue(game.allSubmitted());
+
+        game.clearSubmission(2L);
+        assertFalse(game.allSubmitted());
 
         game.clearSubmissions();
         assertTrue(game.getSubmittedPlayers().isEmpty());

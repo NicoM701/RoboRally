@@ -5,9 +5,10 @@ import com.roborally.common.protocol.Message;
 import com.roborally.server.model.Board;
 import com.roborally.server.model.Lobby;
 import com.roborally.server.model.User;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.context.annotation.Lazy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -31,13 +32,16 @@ public class LobbyService {
     private final SessionManager sessionManager;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
     private final BoardLoader boardLoader;
-    private final GameService gameService;
+    private GameService gameService;
 
-    public LobbyService(UserService userService, SessionManager sessionManager, BoardLoader boardLoader,
-            @Lazy GameService gameService) {
+    public LobbyService(UserService userService, SessionManager sessionManager, BoardLoader boardLoader) {
         this.userService = userService;
         this.sessionManager = sessionManager;
         this.boardLoader = boardLoader;
+    }
+
+    @Autowired
+    public void setGameService(@Lazy GameService gameService) {
         this.gameService = gameService;
     }
 
@@ -132,31 +136,39 @@ public class LobbyService {
         }
 
         String username = getUsernameById(userId);
-        boolean closeLobby = false;
+        String leavingSessionId = userService.getSessionIdByUserId(userId);
 
+        boolean wasHost;
         synchronized (lobby) {
             if (!lobby.containsPlayer(userId)) {
                 userLobbyMap.remove(userId);
                 return;
             }
 
+            wasHost = lobby.isHost(userId);
             lobby.removePlayer(userId);
             userLobbyMap.remove(userId);
 
-            gameService.abortActiveGameForLobbyDeparture(lobbyId, userId);
-
-            if (lobby.getPlayerCount() == 0) {
-                closeLobby = true;
-            } else if (lobby.isHost(userId)) {
+            if (wasHost && lobby.getPlayerCount() > 0) {
                 Long newHost = lobby.getPlayerIds().get(0);
                 lobby.setHostUserId(newHost);
                 log.info("Host transferred to user {} in lobby '{}'", getUsernameById(newHost), lobby.getName());
             }
         }
 
+        if (lobby.getStatus() == Lobby.LobbyStatus.IN_GAME && gameService != null) {
+            gameService.handlePlayerLeave(lobbyId, userId);
+        }
+
         log.info("User {} left lobby '{}'", username, lobby.getName());
 
-        if (closeLobby) {
+        if (leavingSessionId != null) {
+            sessionManager.sendMessage(leavingSessionId, Message.of(MessageType.LOBBY_CLOSED, Map.of(
+                    "reason", "Du hast die Lobby verlassen.",
+                    "lobbyId", lobbyId)));
+        }
+
+        if (lobby.getPlayerCount() == 0) {
             // Last player left → close lobby
             closeLobby(lobbyId);
         } else {
@@ -190,7 +202,10 @@ public class LobbyService {
 
             lobby.removePlayer(targetUserId);
             userLobbyMap.remove(targetUserId);
-            gameService.abortActiveGameForLobbyDeparture(lobbyId, targetUserId);
+        }
+
+        if (lobby.getStatus() == Lobby.LobbyStatus.IN_GAME && gameService != null) {
+            gameService.handlePlayerLeave(lobbyId, targetUserId);
         }
 
         String kickedName = getUsernameById(targetUserId);
@@ -200,7 +215,8 @@ public class LobbyService {
         String kickedSessionId = userService.getSessionIdByUserId(targetUserId);
         if (kickedSessionId != null) {
             sessionManager.sendMessage(kickedSessionId, Message.of(MessageType.LOBBY_CLOSED, Map.of(
-                    "reason", "Du wurdest aus der Lobby gekickt.")));
+                    "reason", "Du wurdest aus der Lobby gekickt.",
+                    "lobbyId", lobbyId)));
         }
 
         broadcastLobbyUpdate(lobby);
@@ -296,6 +312,10 @@ public class LobbyService {
         if (lobby == null)
             return;
 
+        if (gameService != null) {
+            gameService.cancelActiveGame(lobbyId);
+        }
+
         lobby.setStatus(Lobby.LobbyStatus.CLOSED);
 
         // Remove all player mappings
@@ -303,7 +323,7 @@ public class LobbyService {
             userLobbyMap.remove(pid);
         }
 
-        broadcastToLobby(lobby, Message.of(MessageType.LOBBY_CLOSED));
+        broadcastToLobby(lobby, Message.of(MessageType.LOBBY_CLOSED, Map.of("lobbyId", lobbyId)));
         log.info("Lobby '{}' closed", lobby.getName());
         broadcastGlobalLobbyList();
     }

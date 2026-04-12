@@ -50,6 +50,7 @@ class GameServiceTest {
     void setUp() {
         lobby = new Lobby("lobby-1", "TestLobby", 1L, 4);
         lobby.addPlayer(2L);
+        lenient().when(lobbyService.getLobbyIdByUserId(anyLong())).thenReturn(lobby.getId());
     }
 
     @AfterEach

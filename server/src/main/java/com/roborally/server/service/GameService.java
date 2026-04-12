@@ -195,31 +195,28 @@ public class GameService {
             List<ProgramCard> hand = game.getHand(robot.getPlayerId());
 
             // Send hand to player
-            String sessionId = userService.getSessionIdByUserId(robot.getPlayerId());
-            if (sessionId != null) {
-                List<Map<String, Object>> handData = hand.stream().map(c -> {
-                    Map<String, Object> cm = new LinkedHashMap<>();
-                    cm.put("id", c.getId());
-                    cm.put("type", c.getType().name());
-                    cm.put("priority", c.getPriority());
-                    cm.put("displayName", c.getType().getDisplayName());
-                    return cm;
-                }).toList();
+            List<Map<String, Object>> handData = hand.stream().map(c -> {
+                Map<String, Object> cm = new LinkedHashMap<>();
+                cm.put("id", c.getId());
+                cm.put("type", c.getType().name());
+                cm.put("priority", c.getPriority());
+                cm.put("displayName", c.getType().getDisplayName());
+                return cm;
+            }).toList();
 
-                Map<String, Object> dealtPayload = new LinkedHashMap<>();
-                dealtPayload.put("lobbyId", game.getLobbyId());
-                dealtPayload.put("gameInstanceId", game.getGameInstanceId());
-                dealtPayload.put("cards", handData);
-                dealtPayload.put("blockedSlots", robot.getBlockedSlots());
-                dealtPayload.put("round", game.getRound());
-                dealtPayload.put("timerEnabled", timerEnabled);
-                dealtPayload.put("timerSeconds", timerSeconds);
-                if (deadlineEpochMs != null) {
-                    dealtPayload.put("deadlineEpochMs", deadlineEpochMs);
-                }
-
-                sessionManager.sendToSession(sessionId, Message.of(MessageType.CARDS_DEALT, dealtPayload));
+            Map<String, Object> dealtPayload = new LinkedHashMap<>();
+            dealtPayload.put("lobbyId", game.getLobbyId());
+            dealtPayload.put("gameInstanceId", game.getGameInstanceId());
+            dealtPayload.put("cards", handData);
+            dealtPayload.put("blockedSlots", robot.getBlockedSlots());
+            dealtPayload.put("round", game.getRound());
+            dealtPayload.put("timerEnabled", timerEnabled);
+            dealtPayload.put("timerSeconds", timerSeconds);
+            if (deadlineEpochMs != null) {
+                dealtPayload.put("deadlineEpochMs", deadlineEpochMs);
             }
+
+            sendGameMessageToPlayer(game, robot.getPlayerId(), Message.of(MessageType.CARDS_DEALT, dealtPayload));
         }
 
         broadcastProgrammingPhaseStart(game, timerEnabled, timerSeconds, deadlineEpochMs, null, null);
@@ -289,14 +286,11 @@ public class GameService {
         game.getPlayerHands().remove(playerId);
 
         game.markSubmitted(playerId);
-        String sessionId = userService.getSessionIdByUserId(playerId);
-        if (sessionId != null) {
-            sessionManager.sendToSession(sessionId, Message.of(MessageType.PROGRAMMING_PHASE_START, Map.of(
-                    "status", "submitted",
-                    "message", "Programm eingereicht!",
-                    "lobbyId", game.getLobbyId(),
-                    "gameInstanceId", game.getGameInstanceId())));
-        }
+        sendGameMessageToPlayer(game, playerId, Message.of(MessageType.PROGRAMMING_PHASE_START, Map.of(
+                "status", "submitted",
+                "message", "Programm eingereicht!",
+                "lobbyId", game.getLobbyId(),
+                "gameInstanceId", game.getGameInstanceId())));
         broadcastProgrammingProgress(game, playerId);
 
             log.info("Player {} submitted program for round {}", playerId, game.getRound());
@@ -609,6 +603,10 @@ public class GameService {
         abortActiveGameForLobbyDeparture(lobby.getId(), playerId);
     }
 
+    public void handlePlayerLeave(String lobbyId, Long playerId) {
+        abortActiveGameForLobbyDeparture(lobbyId, playerId);
+    }
+
     public void abortActiveGameForLobbyDeparture(String lobbyId, Long playerId) {
         if (lobbyId == null) {
             return;
@@ -630,6 +628,28 @@ public class GameService {
             log.info("Player {} left active game in lobby '{}'; aborting game and cleaning up runtime resources",
                     playerId, lobbyName);
             broadcastToGame(game, Message.error("Spiel beendet: Ein Spieler hat die Lobby verlassen."));
+            cleanupGame(game);
+        }
+    }
+
+    public void cancelActiveGame(String lobbyId) {
+        cancelTimer(lobbyId);
+
+        if (lobbyId == null) {
+            return;
+        }
+
+        GameState game = games.get(lobbyId);
+        if (game == null) {
+            return;
+        }
+
+        synchronized (game) {
+            if (!isGameActive(game)) {
+                games.remove(lobbyId, game);
+                return;
+            }
+
             cleanupGame(game);
         }
     }
@@ -682,10 +702,18 @@ public class GameService {
 
     private void broadcastToGame(GameState game, Message message) {
         for (Long playerId : game.getRobots().keySet()) {
-            String sessionId = userService.getSessionIdByUserId(playerId);
-            if (sessionId != null) {
-                sessionManager.sendToSession(sessionId, message);
-            }
+            sendGameMessageToPlayer(game, playerId, message);
+        }
+    }
+
+    private void sendGameMessageToPlayer(GameState game, Long playerId, Message message) {
+        if (!Objects.equals(lobbyService.getLobbyIdByUserId(playerId), game.getLobbyId())) {
+            return;
+        }
+
+        String sessionId = userService.getSessionIdByUserId(playerId);
+        if (sessionId != null) {
+            sessionManager.sendToSession(sessionId, message);
         }
     }
 }

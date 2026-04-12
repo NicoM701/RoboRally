@@ -1,7 +1,7 @@
 package com.roborally.server.service;
 
-import com.roborally.server.model.Lobby;
 import com.roborally.server.model.GameState;
+import com.roborally.server.model.Lobby;
 import com.roborally.server.model.User;
 import com.roborally.server.repository.UserRepository;
 import org.junit.jupiter.api.*;
@@ -27,9 +27,9 @@ class LobbyServiceTest {
     @Autowired
     private SessionManager sessionManager;
     @Autowired
-    private GameService gameService;
-    @Autowired
     private UserRepository userRepository;
+    @Autowired
+    private GameService gameService;
 
     private Long hostId;
     private Long player2Id;
@@ -204,6 +204,19 @@ class LobbyServiceTest {
     }
 
     @Test
+    @DisplayName("Leave: player can create a new lobby immediately afterwards")
+    void leaveLobby_allowsImmediateNewLobby() {
+        lobbyService.createLobby(hostId, "First", null, 4);
+
+        lobbyService.leaveLobby(hostId);
+        Lobby newLobby = lobbyService.createLobby(hostId, "Second", null, 4);
+
+        assertNotNull(newLobby);
+        assertEquals("Second", newLobby.getName());
+        assertEquals(newLobby.getId(), lobbyService.getLobbyIdByUserId(hostId));
+    }
+
+    @Test
     @DisplayName("Leave: during active game → player removed before lobby returns to waiting")
     void leaveLobby_activeGame_abortsAndRemovesPlayer() {
         Lobby lobby = lobbyService.createLobby(hostId, "Test", null, 4);
@@ -250,6 +263,7 @@ class LobbyServiceTest {
         assertTrue(game.getPlayerHands().isEmpty());
         assertTrue(game.getDeck().isEmpty());
         assertFalse(lobby.containsPlayer(player2Id));
+        assertEquals(1, lobby.getPlayerCount());
     }
 
     @Test
