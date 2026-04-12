@@ -22,6 +22,7 @@ public enum MessageType {
     CHOOSE_ARCHIVE_LOCATION,
     TOGGLE_SHUTDOWN,
     REQUEST_LOBBY_LIST,
+    REQUEST_AVAILABLE_BOARDS,
 
     // Server → Client
     LOGIN_SUCCESS,
@@ -31,6 +32,7 @@ public enum MessageType {
     LOBBY_LIST,
     LOBBY_UPDATE,
     LOBBY_CLOSED,
+    AVAILABLE_BOARDS,
     GAME_STATE,
     CARDS_DEALT,
     PROGRAMMING_PHASE_START,

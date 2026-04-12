@@ -12,16 +12,31 @@ import java.util.Map;
 public class ConveyorBelt {
     private final Direction direction;
     private final boolean express; // true = express (2 steps), false = normal (1 step)
-    private final Direction curveFrom; // null = straight, non-null = belt curves from this direction
+    private RotationDirection curveRotation; // CLOCKWISE or COUNTERCLOCKWISE
+    private boolean crossing;
+    private String crossingType; // LEFT, RIGHT, or LEFTRIGHT
+    private Direction curveFrom; // Optional input flow direction
 
     public ConveyorBelt(Direction direction, boolean express) {
-        this(direction, express, null);
+        this.direction = direction;
+        this.express = express;
     }
 
     public ConveyorBelt(Direction direction, boolean express, Direction curveFrom) {
-        this.direction = direction;
-        this.express = express;
+        this(direction, express);
         this.curveFrom = curveFrom;
+    }
+
+    public ConveyorBelt(Direction direction, boolean express, RotationDirection curveRotation, boolean crossing) {
+        this(direction, express);
+        this.curveRotation = curveRotation;
+        setCrossing(crossing);
+    }
+
+    public ConveyorBelt(Direction direction, boolean express, RotationDirection curveRotation, String crossingType) {
+        this(direction, express);
+        this.curveRotation = curveRotation;
+        setCrossingType(crossingType);
     }
 
     public Direction getDirection() {
@@ -32,35 +47,76 @@ public class ConveyorBelt {
         return express;
     }
 
+    public RotationDirection getCurveRotation() {
+        if (curveRotation != null) {
+            return curveRotation;
+        }
+        if (curveFrom == null) {
+            return null;
+        }
+        if (curveFrom.rotateClockwise() == direction) {
+            return RotationDirection.CLOCKWISE;
+        }
+        if (curveFrom.rotateCounterClockwise() == direction) {
+            return RotationDirection.COUNTERCLOCKWISE;
+        }
+        return null;
+    }
+
+    public void setCurveRotation(RotationDirection curveRotation) {
+        this.curveRotation = curveRotation;
+    }
+
+    public boolean isCrossing() {
+        return crossing;
+    }
+
+    public void setCrossing(boolean crossing) {
+        this.crossing = crossing;
+        if (!crossing) {
+            this.crossingType = null;
+        } else if (this.crossingType == null) {
+            this.crossingType = "LEFTRIGHT";
+        }
+    }
+
+    public String getCrossingType() {
+        return crossingType;
+    }
+
+    public void setCrossingType(String crossingType) {
+        this.crossingType = crossingType;
+        this.crossing = crossingType != null && !crossingType.isBlank();
+    }
+
     public Direction getCurveFrom() {
         return curveFrom;
     }
 
-    public boolean isCurve() {
-        return curveFrom != null;
+    public void setCurveFrom(Direction curveFrom) {
+        this.curveFrom = curveFrom;
     }
 
-    /**
-     * Get the rotation applied when transported onto this curved belt.
-     */
-    public RotationDirection getCurveRotation() {
-        if (curveFrom == null)
-            return null;
-        // If coming from curveFrom and belt points in direction,
-        // determine if that's a CW or CCW turn
-        if (curveFrom.rotateClockwise() == direction)
-            return RotationDirection.CLOCKWISE;
-        if (curveFrom.rotateCounterClockwise() == direction)
-            return RotationDirection.COUNTERCLOCKWISE;
-        return null;
+    public boolean isCurve() {
+        return getCurveRotation() != null;
     }
 
     public Map<String, Object> toMap() {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("direction", direction.name());
         m.put("express", express);
-        if (curveFrom != null)
+        RotationDirection resolvedCurveRotation = getCurveRotation();
+        if (resolvedCurveRotation != null) {
+            // "LEFT" corresponds to COUNTERCLOCKWISE turn, "RIGHT" to CLOCKWISE
+            m.put("curveRotation", resolvedCurveRotation == RotationDirection.CLOCKWISE ? "RIGHT" : "LEFT");
+        }
+        if (curveFrom != null) {
             m.put("curveFrom", curveFrom.name());
+        }
+        if (crossing) {
+            m.put("crossing", true);
+            m.put("crossingType", crossingType == null ? "LEFTRIGHT" : crossingType);
+        }
         return m;
     }
 }

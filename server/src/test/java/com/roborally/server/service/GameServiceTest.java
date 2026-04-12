@@ -3,14 +3,20 @@ package com.roborally.server.service;
 import com.roborally.common.enums.CardType;
 import com.roborally.common.enums.Direction;
 import com.roborally.common.enums.GamePhase;
+import com.roborally.common.enums.MessageType;
+import com.roborally.common.protocol.Message;
 import com.roborally.server.model.*;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.*;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
+import java.lang.reflect.Field;
 import java.util.*;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -44,6 +50,12 @@ class GameServiceTest {
     void setUp() {
         lobby = new Lobby("lobby-1", "TestLobby", 1L, 4);
         lobby.addPlayer(2L);
+        lenient().when(lobbyService.getLobbyIdByUserId(anyLong())).thenReturn(lobby.getId());
+    }
+
+    @AfterEach
+    void tearDown() {
+        gameService.shutdown();
     }
 
     // ═══════════════════════════════════════
@@ -91,6 +103,19 @@ class GameServiceTest {
     }
 
     @Test
+    void startGame_tooManyPlayersForBoard_throws() {
+        lobby.addPlayer(3L);
+        when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
+        Board board = new Board("test", 12, 12);
+        board.addStartPosition(1, 11);
+        board.addStartPosition(2, 11);
+        board.setTotalCheckpoints(3);
+        when(boardLoader.loadBoard(anyString())).thenReturn(board);
+
+        assertThrows(IllegalArgumentException.class, () -> gameService.startGame(1L));
+    }
+
+    @Test
     void startGame_success_createsGameAndDeals() {
         when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
         Board board = new Board("test", 12, 12);
@@ -114,13 +139,96 @@ class GameServiceTest {
     }
 
     @Test
-    void startGame_customCheckpoints_setsOnBoard() {
+    void startGame_broadcastsScopedContextOnInitialGameMessages() {
+        when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
+        when(lobbyService.getLobbyById(lobby.getId())).thenReturn(lobby);
+        Board board = new Board("test", 12, 12);
+        board.addStartPosition(1, 11);
+        board.addStartPosition(2, 11);
+        board.setTotalCheckpoints(3);
+        when(boardLoader.loadBoard(anyString())).thenReturn(board);
+        when(cardService.createDeck()).thenReturn(createMockDeck());
+        when(cardService.deal(any(), any(), any())).thenReturn(createMockHand());
+        when(userService.getSessionIdByUserId(1L)).thenReturn("session-1");
+        when(userService.getSessionIdByUserId(2L)).thenReturn("session-2");
+        lenient().when(movementService.executeStep(any(), anyInt())).thenReturn(List.of());
+
+        GameState game = gameService.startGame(1L);
+
+        ArgumentCaptor<Message> messageCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(sessionManager, atLeastOnce()).sendToSession(anyString(), messageCaptor.capture());
+
+        List<Message> gameStateMessages = messageCaptor.getAllValues().stream()
+                .filter(message -> message.getType() == MessageType.GAME_STATE)
+                .toList();
+        Message cardsDealt = messageCaptor.getAllValues().stream()
+                .filter(message -> message.getType() == MessageType.CARDS_DEALT)
+                .findFirst()
+                .orElseThrow();
+        Message phaseStart = messageCaptor.getAllValues().stream()
+                .filter(message -> message.getType() == MessageType.PROGRAMMING_PHASE_START)
+                .findFirst()
+                .orElseThrow();
+        Message phaseOnlyUpdate = gameStateMessages.stream()
+                .filter(message -> message.get("board") == null)
+                .findFirst()
+                .orElseThrow();
+
+        assertFalse(gameStateMessages.isEmpty());
+        assertEquals(lobby.getId(), phaseOnlyUpdate.get("lobbyId"));
+        assertEquals(game.getGameInstanceId(), phaseOnlyUpdate.get("gameInstanceId"));
+        assertEquals("PROGRAMMING", phaseOnlyUpdate.get("phase"));
+        assertEquals(lobby.getId(), cardsDealt.get("lobbyId"));
+        assertEquals(game.getGameInstanceId(), cardsDealt.get("gameInstanceId"));
+        assertEquals(lobby.getId(), phaseStart.get("lobbyId"));
+        assertEquals(game.getGameInstanceId(), phaseStart.get("gameInstanceId"));
+    }
+
+    @Test
+    void startGame_missingCheckpoints_defaultsToBoardTotal() {
+        when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
+        Board board = new Board("test", 12, 12);
+        board.addStartPosition(1, 11);
+        board.addStartPosition(2, 11);
+        board.setTotalCheckpoints(2);
+        when(boardLoader.loadBoard(anyString())).thenReturn(board);
+        when(cardService.createDeck()).thenReturn(createMockDeck());
+        lenient().when(userService.getSessionIdByUserId(anyLong())).thenReturn(null);
+        lenient().when(movementService.executeStep(any(), anyInt())).thenReturn(List.of());
+        when(cardService.deal(any(), any(), any())).thenReturn(createMockHand());
+
+        GameState game = gameService.startGame(1L);
+        assertEquals(2, game.getBoard().getTotalCheckpoints());
+        assertEquals(2, lobby.getGameSettings().get("checkpoints"));
+    }
+
+    @Test
+    void startGame_excessiveCheckpoints_clampsToBoardTotal() {
         lobby.getGameSettings().put("checkpoints", 5);
         when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
         Board board = new Board("test", 12, 12);
         board.addStartPosition(1, 11);
         board.addStartPosition(2, 11);
-        board.setTotalCheckpoints(3);
+        board.setTotalCheckpoints(2);
+        when(boardLoader.loadBoard(anyString())).thenReturn(board);
+        when(cardService.createDeck()).thenReturn(createMockDeck());
+        lenient().when(userService.getSessionIdByUserId(anyLong())).thenReturn(null);
+        lenient().when(movementService.executeStep(any(), anyInt())).thenReturn(List.of());
+        when(cardService.deal(any(), any(), any())).thenReturn(createMockHand());
+
+        GameState game = gameService.startGame(1L);
+        assertEquals(2, game.getBoard().getTotalCheckpoints());
+        assertEquals(2, lobby.getGameSettings().get("checkpoints"));
+    }
+
+    @Test
+    void startGame_validCustomCheckpointsBelowBoardTotal_setsOnBoard() {
+        lobby.getGameSettings().put("checkpoints", 5);
+        when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
+        Board board = new Board("test", 12, 12);
+        board.addStartPosition(1, 11);
+        board.addStartPosition(2, 11);
+        board.setTotalCheckpoints(6);
         when(boardLoader.loadBoard(anyString())).thenReturn(board);
         when(cardService.createDeck()).thenReturn(createMockDeck());
         lenient().when(userService.getSessionIdByUserId(anyLong())).thenReturn(null);
@@ -247,6 +355,50 @@ class GameServiceTest {
         verify(movementService, times(5)).executeStep(any(), anyInt());
     }
 
+    @Test
+    void executionAndGameOverMessagesIncludeScopedContext() {
+        when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
+        when(lobbyService.getLobbyById(lobby.getId())).thenReturn(lobby);
+        Board board = new Board("test", 12, 12);
+        board.addStartPosition(1, 11);
+        board.addStartPosition(2, 11);
+        board.setTotalCheckpoints(3);
+        when(boardLoader.loadBoard(anyString())).thenReturn(board);
+        when(cardService.createDeck()).thenReturn(createMockDeck());
+        when(cardService.deal(any(), any(), any())).thenReturn(createMockHand());
+        when(cardService.validateProgram(any(), any(), any(), anyInt())).thenReturn(null);
+        when(userService.getSessionIdByUserId(1L)).thenReturn("session-1");
+        when(userService.getSessionIdByUserId(2L)).thenReturn("session-2");
+        when(movementService.executeStep(any(), anyInt())).thenReturn(List.of());
+
+        GameState game = gameService.startGame(1L);
+        game.getBoard().setTotalCheckpoints(0);
+        game.markSubmitted(2L);
+        Robot otherRobot = game.getRobot(2L);
+        for (int i = 0; i < 5; i++) {
+            otherRobot.setSlot(i, new ProgramCard(20 + i, CardType.MOVE_1, 100 + i));
+        }
+
+        gameService.submitProgram(1L, List.of(1, 2, 3, 4, 5));
+
+        ArgumentCaptor<Message> messageCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(sessionManager, atLeastOnce()).sendToSession(anyString(), messageCaptor.capture());
+
+        Message executionStep = messageCaptor.getAllValues().stream()
+                .filter(message -> message.getType() == MessageType.EXECUTION_STEP)
+                .findFirst()
+                .orElseThrow();
+        Message gameOver = messageCaptor.getAllValues().stream()
+                .filter(message -> message.getType() == MessageType.GAME_OVER)
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(lobby.getId(), executionStep.get("lobbyId"));
+        assertEquals(game.getGameInstanceId(), executionStep.get("gameInstanceId"));
+        assertEquals(lobby.getId(), gameOver.get("lobbyId"));
+        assertEquals(game.getGameInstanceId(), gameOver.get("gameInstanceId"));
+    }
+
     // ═══════════════════════════════════════
     // Queries
     // ═══════════════════════════════════════
@@ -361,20 +513,174 @@ class GameServiceTest {
     }
 
     @Test
-    void startGame_insufficientStartPositions_usesDefaults() {
+    void startGame_usesConfiguredTimerSecondsInProgrammingMessages() {
+        lobby.getGameSettings().put("timerEnabled", true);
+        lobby.getGameSettings().put("timerSeconds", 75);
+        when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
+        when(lobbyService.getLobbyById(lobby.getId())).thenReturn(lobby);
+        Board board = new Board("test", 12, 12);
+        board.addStartPosition(1, 11);
+        board.addStartPosition(2, 11);
+        board.setTotalCheckpoints(3);
+        when(boardLoader.loadBoard(anyString())).thenReturn(board);
+        when(cardService.createDeck()).thenReturn(createMockDeck());
+        when(cardService.deal(any(), any(), any())).thenReturn(createMockHand());
+        when(userService.getSessionIdByUserId(1L)).thenReturn("session-1");
+        when(userService.getSessionIdByUserId(2L)).thenReturn("session-2");
+        lenient().when(movementService.executeStep(any(), anyInt())).thenReturn(List.of());
+
+        gameService.startGame(1L);
+
+        ArgumentCaptor<Message> messageCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(sessionManager, atLeastOnce()).sendToSession(anyString(), messageCaptor.capture());
+
+        Message cardsDealt = messageCaptor.getAllValues().stream()
+                .filter(message -> message.getType() == MessageType.CARDS_DEALT)
+                .findFirst()
+                .orElseThrow();
+        Message phaseStart = messageCaptor.getAllValues().stream()
+                .filter(message -> message.getType() == MessageType.PROGRAMMING_PHASE_START)
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(Integer.valueOf(75), cardsDealt.get("timerSeconds"));
+        assertTrue((Boolean) cardsDealt.get("timerEnabled"));
+        Object cardsDeadlineValue = cardsDealt.get("deadlineEpochMs");
+        assertNotNull(cardsDeadlineValue);
+        Long cardsDeadlineEpochMs = ((Number) cardsDeadlineValue).longValue();
+        assertEquals(Integer.valueOf(75), phaseStart.get("timerSeconds"));
+        Long phaseDeadlineEpochMs = ((Number) phaseStart.get("deadlineEpochMs")).longValue();
+        assertEquals(cardsDeadlineEpochMs, phaseDeadlineEpochMs);
+        assertEquals(Integer.valueOf(0), phaseStart.get("submittedCount"));
+        assertEquals(Integer.valueOf(2), phaseStart.get("totalPlayers"));
+    }
+
+    @Test
+    void startGame_programmingMessagesUseScheduledDeadline() {
+        lobby.getGameSettings().put("timerEnabled", true);
+        lobby.getGameSettings().put("timerSeconds", 75);
+        when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
+        when(lobbyService.getLobbyById(lobby.getId())).thenReturn(lobby);
+        Board board = new Board("test", 12, 12);
+        board.addStartPosition(1, 11);
+        board.addStartPosition(2, 11);
+        board.setTotalCheckpoints(3);
+        when(boardLoader.loadBoard(anyString())).thenReturn(board);
+        when(cardService.createDeck()).thenReturn(createMockDeck());
+        when(cardService.deal(any(), any(), any())).thenReturn(createMockHand());
+        when(userService.getSessionIdByUserId(1L)).thenReturn("session-1");
+        when(userService.getSessionIdByUserId(2L)).thenReturn("session-2");
+        lenient().when(movementService.executeStep(any(), anyInt())).thenReturn(List.of());
+        doAnswer(invocation -> {
+            try {
+                Thread.sleep(20L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(e);
+            }
+            return null;
+        }).when(sessionManager).sendToSession(anyString(), any(Message.class));
+
+        gameService.startGame(1L);
+
+        ArgumentCaptor<Message> messageCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(sessionManager, atLeastOnce()).sendToSession(anyString(), messageCaptor.capture());
+
+        Message phaseStart = messageCaptor.getAllValues().stream()
+                .filter(message -> message.getType() == MessageType.PROGRAMMING_PHASE_START)
+                .findFirst()
+                .orElseThrow();
+
+        Long broadcastDeadlineEpochMs = ((Number) phaseStart.get("deadlineEpochMs")).longValue();
+        assertEquals(broadcastDeadlineEpochMs, getProgrammingDeadline(lobby.getId()));
+    }
+
+    @Test
+    void submitProgram_broadcastsProgrammingProgressToOtherPlayers() {
+        GameState game = startTestGame();
+        List<ProgramCard> hand = createMockHand();
+        game.getPlayerHands().put(1L, hand);
+        when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
+        when(lobbyService.getLobbyById(lobby.getId())).thenReturn(lobby);
+        when(cardService.validateProgram(any(), any(), any(), anyInt())).thenReturn(null);
+        when(userService.getSessionIdByUserId(1L)).thenReturn("session-1");
+        when(userService.getSessionIdByUserId(2L)).thenReturn("session-2");
+        User alice = new User("Alice", "a@example.com", "hash", false);
+        alice.setId(1L);
+        when(userService.getUserById(1L)).thenReturn(Optional.of(alice));
+
+        gameService.submitProgram(1L, List.of(1, 2, 3, 4, 5));
+
+        ArgumentCaptor<Message> sessionOneCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(sessionManager, atLeastOnce()).sendToSession(eq("session-1"), sessionOneCaptor.capture());
+        Message selfAck = sessionOneCaptor.getAllValues().stream()
+                .filter(message -> message.getType() == MessageType.PROGRAMMING_PHASE_START)
+                .filter(message -> "submitted".equals(message.get("status")))
+                .findFirst()
+                .orElseThrow();
+
+        ArgumentCaptor<Message> sessionTwoCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(sessionManager, atLeastOnce()).sendToSession(eq("session-2"), sessionTwoCaptor.capture());
+        Message teamProgress = sessionTwoCaptor.getAllValues().stream()
+                .filter(message -> message.getType() == MessageType.PROGRAMMING_PHASE_START)
+                .filter(message -> "progress".equals(message.get("status")))
+                .reduce((first, second) -> second)
+                .orElseThrow();
+
+        assertEquals("submitted", selfAck.get("status"));
+        assertEquals(lobby.getId(), selfAck.get("lobbyId"));
+        assertEquals(game.getGameInstanceId(), selfAck.get("gameInstanceId"));
+        assertEquals(Integer.valueOf(1), teamProgress.get("submittedCount"));
+        assertEquals(Integer.valueOf(2), teamProgress.get("totalPlayers"));
+        assertEquals(Long.valueOf(1L), teamProgress.get("submittedPlayerId"));
+        assertEquals("Alice", teamProgress.get("submittedUsername"));
+    }
+
+    @Test
+    void handlePlayerDeparture_activeGame_abortsAndCleansUp() {
+        GameState game = startTestGame();
+        when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
+        when(userService.getSessionIdByUserId(1L)).thenReturn("session-1");
+        when(userService.getSessionIdByUserId(2L)).thenReturn("session-2");
+        when(lobbyService.getLobbyById(lobby.getId())).thenReturn(lobby);
+
+        gameService.handlePlayerDeparture(1L);
+
+        assertNull(gameService.getGame(lobby.getId()));
+        assertFalse(game.isActive());
+        assertEquals(Lobby.LobbyStatus.WAITING, lobby.getStatus());
+        assertTrue(game.getPlayerHands().isEmpty());
+        assertTrue(game.getDeck().isEmpty());
+        verify(sessionManager).sendToSession(eq("session-1"), argThat(m -> m.getType() == com.roborally.common.enums.MessageType.ERROR));
+        verify(sessionManager).sendToSession(eq("session-2"), argThat(m -> m.getType() == com.roborally.common.enums.MessageType.ERROR));
+    }
+
+    @Test
+    void shutdown_cleansGamesTimersAndScheduler() {
+        lobby.getGameSettings().put("timerEnabled", true);
+        GameState game = startTestGame();
+
+        gameService.shutdown();
+
+        assertNull(gameService.getGame(lobby.getId()));
+        assertFalse(game.isActive());
+        assertTrue(((Map<?, ?>) ReflectionTestUtils.getField(gameService, "timers")).isEmpty());
+        ScheduledThreadPoolExecutor scheduler =
+                (ScheduledThreadPoolExecutor) ReflectionTestUtils.getField(gameService, "scheduler");
+        assertNotNull(scheduler);
+        assertTrue(scheduler.isShutdown());
+    }
+
+    @Test
+    void startGame_insufficientStartPositions_throws() {
         when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
         Board board = new Board("test", 12, 12);
         // Only 1 start position for 2 players
         board.addStartPosition(1, 11);
         board.setTotalCheckpoints(3);
         when(boardLoader.loadBoard(anyString())).thenReturn(board);
-        when(cardService.createDeck()).thenReturn(createMockDeck());
-        lenient().when(userService.getSessionIdByUserId(anyLong())).thenReturn(null);
-        lenient().when(movementService.executeStep(any(), anyInt())).thenReturn(List.of());
-        when(cardService.deal(any(), any(), any())).thenReturn(createMockHand());
 
-        GameState game = gameService.startGame(1L);
-        assertEquals(2, game.getRobots().size());
+        assertThrows(IllegalArgumentException.class, () -> gameService.startGame(1L));
     }
 
     // ═══════════════════════════════════════
@@ -420,5 +726,17 @@ class GameServiceTest {
         hand.add(new ProgramCard(8, CardType.MOVE_1, 800));
         hand.add(new ProgramCard(9, CardType.MOVE_1, 900));
         return hand;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Long getProgrammingDeadline(String lobbyId) {
+        try {
+            Field field = GameService.class.getDeclaredField("programmingDeadlines");
+            field.setAccessible(true);
+            Map<String, Long> deadlines = (Map<String, Long>) field.get(gameService);
+            return deadlines.get(lobbyId);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
     }
 }

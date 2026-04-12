@@ -2,6 +2,7 @@ package com.roborally.server.service;
 
 import com.roborally.server.model.User;
 import com.roborally.server.repository.UserRepository;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -13,6 +14,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class UserService {
 
     private final UserRepository userRepository;
+    private final LobbyService lobbyService;
+    private final GameService gameService;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
     private final AtomicInteger guestCounter = new AtomicInteger(1);
 
@@ -21,8 +24,11 @@ public class UserService {
     // Track userId -> sessionId (reverse lookup)
     private final Map<Long, String> userSessions = new ConcurrentHashMap<>();
 
-    public UserService(UserRepository userRepository) {
+    public UserService(UserRepository userRepository, @Lazy LobbyService lobbyService,
+            @Lazy GameService gameService) {
         this.userRepository = userRepository;
+        this.lobbyService = lobbyService;
+        this.gameService = gameService;
     }
 
     /**
@@ -135,6 +141,10 @@ public class UserService {
 
         if (!passwordEncoder.matches(password, user.getPasswordHash())) {
             throw new IllegalArgumentException("Passwort ist falsch.");
+        }
+
+        if (lobbyService.getLobbyByUserId(userId) != null) {
+            lobbyService.leaveLobby(userId);
         }
 
         // Remove from online tracking

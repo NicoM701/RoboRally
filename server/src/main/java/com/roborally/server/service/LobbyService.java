@@ -2,8 +2,11 @@ package com.roborally.server.service;
 
 import com.roborally.common.enums.MessageType;
 import com.roborally.common.protocol.Message;
+import com.roborally.server.model.Board;
 import com.roborally.server.model.Lobby;
 import com.roborally.server.model.User;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -28,10 +31,18 @@ public class LobbyService {
     private final UserService userService;
     private final SessionManager sessionManager;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+    private final BoardLoader boardLoader;
+    private GameService gameService;
 
-    public LobbyService(UserService userService, SessionManager sessionManager) {
+    public LobbyService(UserService userService, SessionManager sessionManager, BoardLoader boardLoader) {
         this.userService = userService;
         this.sessionManager = sessionManager;
+        this.boardLoader = boardLoader;
+    }
+
+    @Autowired
+    public void setGameService(@Lazy GameService gameService) {
+        this.gameService = gameService;
     }
 
     // ─── Create ─────────────────────────────────────────
@@ -54,10 +65,18 @@ public class LobbyService {
             lobby.setPasswordHash(passwordEncoder.encode(password));
         }
 
+        String initialBoard = "map6";
+        if (maxPlayers <= 2) initialBoard = "map1";
+        else if (maxPlayers <= 4) initialBoard = "map3";
+        lobby.getGameSettings().put("boardName", initialBoard);
+        Board initialBoardState = boardLoader.loadBoard(initialBoard);
+        lobby.getGameSettings().put("checkpoints", sanitizeCheckpointSetting(null, initialBoardState));
+
         lobbies.put(lobbyId, lobby);
         userLobbyMap.put(hostUserId, lobbyId);
 
         log.info("Lobby created: '{}' (ID: {}) by user {}", name, lobbyId, hostUserId);
+        broadcastGlobalLobbyList();
         return lobby;
     }
 
@@ -117,25 +136,42 @@ public class LobbyService {
         }
 
         String username = getUsernameById(userId);
-        
+        String leavingSessionId = userService.getSessionIdByUserId(userId);
+
+        boolean wasHost;
         synchronized (lobby) {
+            if (!lobby.containsPlayer(userId)) {
+                userLobbyMap.remove(userId);
+                return;
+            }
+
+            wasHost = lobby.isHost(userId);
             lobby.removePlayer(userId);
             userLobbyMap.remove(userId);
+
+            if (wasHost && lobby.getPlayerCount() > 0) {
+                Long newHost = lobby.getPlayerIds().get(0);
+                lobby.setHostUserId(newHost);
+                log.info("Host transferred to user {} in lobby '{}'", getUsernameById(newHost), lobby.getName());
+            }
+        }
+
+        if (lobby.getStatus() == Lobby.LobbyStatus.IN_GAME && gameService != null) {
+            gameService.handlePlayerLeave(lobbyId, userId);
         }
 
         log.info("User {} left lobby '{}'", username, lobby.getName());
+
+        if (leavingSessionId != null) {
+            sessionManager.sendMessage(leavingSessionId, Message.of(MessageType.LOBBY_CLOSED, Map.of(
+                    "reason", "Du hast die Lobby verlassen.",
+                    "lobbyId", lobbyId)));
+        }
 
         if (lobby.getPlayerCount() == 0) {
             // Last player left → close lobby
             closeLobby(lobbyId);
         } else {
-            // Transfer host if host left
-            if (lobby.isHost(userId)) {
-                Long newHost = lobby.getPlayerIds().get(0);
-                lobby.setHostUserId(newHost);
-                log.info("Host transferred to user {} in lobby '{}'", getUsernameById(newHost), lobby.getName());
-            }
-
             broadcastToLobby(lobby, Message.of(MessageType.PLAYER_LEFT, Map.of(
                     "userId", userId,
                     "username", username)));
@@ -168,6 +204,10 @@ public class LobbyService {
             userLobbyMap.remove(targetUserId);
         }
 
+        if (lobby.getStatus() == Lobby.LobbyStatus.IN_GAME && gameService != null) {
+            gameService.handlePlayerLeave(lobbyId, targetUserId);
+        }
+
         String kickedName = getUsernameById(targetUserId);
         log.info("User {} kicked from lobby '{}' by host", kickedName, lobby.getName());
 
@@ -175,7 +215,8 @@ public class LobbyService {
         String kickedSessionId = userService.getSessionIdByUserId(targetUserId);
         if (kickedSessionId != null) {
             sessionManager.sendMessage(kickedSessionId, Message.of(MessageType.LOBBY_CLOSED, Map.of(
-                    "reason", "Du wurdest aus der Lobby gekickt.")));
+                    "reason", "Du wurdest aus der Lobby gekickt.",
+                    "lobbyId", lobbyId)));
         }
 
         broadcastLobbyUpdate(lobby);
@@ -220,10 +261,48 @@ public class LobbyService {
 
         // Merge settings
         if (settings != null) {
-            lobby.getGameSettings().putAll(settings);
+            Map<String, Object> mergedSettings = new LinkedHashMap<>(lobby.getGameSettings());
+            mergedSettings.putAll(settings);
+
+            String targetBoard = normalizeBoardName(mergedSettings.get("boardName"));
+            Board board = boardLoader.loadBoard(targetBoard);
+            if (board.getStartPositions().size() < lobby.getMaxPlayers()) {
+                throw new IllegalArgumentException("Dieses Spielbrett unterstützt nur " + board.getStartPositions().size() + " Spieler. Aktuelle Max-Spieler: " + lobby.getMaxPlayers());
+            }
+
+            mergedSettings.put("boardName", targetBoard);
+            mergedSettings.put("checkpoints", sanitizeCheckpointSetting(mergedSettings.get("checkpoints"), board));
+
+            lobby.getGameSettings().putAll(mergedSettings);
         }
 
         broadcastLobbyUpdate(lobby);
+    }
+
+    private String normalizeBoardName(Object boardName) {
+        if (boardName instanceof String rawName && !rawName.trim().isEmpty()) {
+            return rawName.trim();
+        }
+        return "map1";
+    }
+
+    private int sanitizeCheckpointSetting(Object requestedValue, Board board) {
+        int boardCheckpoints = board.getTotalCheckpoints();
+        if (boardCheckpoints <= 0) {
+            return 0;
+        }
+
+        int minCheckpoints = Math.min(2, boardCheckpoints);
+        if (!(requestedValue instanceof Number number)) {
+            return boardCheckpoints;
+        }
+
+        int requestedCheckpoints = number.intValue();
+        if (requestedCheckpoints < minCheckpoints) {
+            return minCheckpoints;
+        }
+
+        return Math.min(requestedCheckpoints, boardCheckpoints);
     }
 
     // ─── Close / Cleanup ────────────────────────────────
@@ -233,6 +312,10 @@ public class LobbyService {
         if (lobby == null)
             return;
 
+        if (gameService != null) {
+            gameService.cancelActiveGame(lobbyId);
+        }
+
         lobby.setStatus(Lobby.LobbyStatus.CLOSED);
 
         // Remove all player mappings
@@ -240,8 +323,9 @@ public class LobbyService {
             userLobbyMap.remove(pid);
         }
 
-        broadcastToLobby(lobby, Message.of(MessageType.LOBBY_CLOSED));
+        broadcastToLobby(lobby, Message.of(MessageType.LOBBY_CLOSED, Map.of("lobbyId", lobbyId)));
         log.info("Lobby '{}' closed", lobby.getName());
+        broadcastGlobalLobbyList();
     }
 
     // ─── Queries ────────────────────────────────────────
@@ -274,10 +358,17 @@ public class LobbyService {
 
     // ─── Broadcast Helpers ──────────────────────────────
 
+    public void broadcastGlobalLobbyList() {
+        sessionManager.broadcastAll(Message.of(MessageType.LOBBY_LIST, Map.of(
+                "lobbies", getLobbyList())));
+    }
+
     private void broadcastLobbyUpdate(Lobby lobby) {
         Map<Long, String> usernames = getUsernameMap(lobby.getPlayerIds());
         Message update = Message.of(MessageType.LOBBY_UPDATE, Map.of("lobby", lobby.toMap(usernames)));
         broadcastToLobby(lobby, update);
+        // Also inform the whole server about the updated player count / settings
+        broadcastGlobalLobbyList();
     }
 
     public void broadcastToLobby(Lobby lobby, Message message) {

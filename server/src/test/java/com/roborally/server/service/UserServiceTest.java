@@ -1,5 +1,7 @@
 package com.roborally.server.service;
 
+import com.roborally.server.model.GameState;
+import com.roborally.server.model.Lobby;
 import com.roborally.server.model.User;
 import com.roborally.server.repository.UserRepository;
 import org.junit.jupiter.api.*;
@@ -21,10 +23,17 @@ class UserServiceTest {
     private UserService userService;
 
     @Autowired
+    private LobbyService lobbyService;
+
+    @Autowired
+    private GameService gameService;
+
+    @Autowired
     private UserRepository userRepository;
 
     @BeforeEach
     void cleanUp() {
+        lobbyService.clearAll();
         userRepository.deleteAll();
     }
 
@@ -247,6 +256,30 @@ class UserServiceTest {
         userService.deleteUser(user.getId(), "pass");
 
         assertFalse(userRepository.findById(user.getId()).isPresent());
+    }
+
+    @Test
+    @DisplayName("Delete: in active game/lobby → cleans up runtime before account removal")
+    void deleteUser_activeGameAndLobby_cleansUpBeforeRemoval() {
+        User host = userService.register("host", "host@mail.de", "pass");
+        userService.login("host", "pass", "session-host");
+        User player = userService.register("player", "player@mail.de", "pass");
+        userService.login("player", "pass", "session-player");
+
+        Lobby lobby = lobbyService.createLobby(host.getId(), "Test", null, 4);
+        lobbyService.joinLobby(player.getId(), lobby.getId(), null);
+        GameState game = gameService.startGame(host.getId());
+
+        userService.deleteUser(player.getId(), "pass");
+
+        assertFalse(userRepository.findById(player.getId()).isPresent());
+        assertNull(userService.getSessionIdByUserId(player.getId()));
+        assertNull(gameService.getGame(lobby.getId()));
+        assertFalse(game.isActive());
+        assertEquals(Lobby.LobbyStatus.WAITING, lobby.getStatus());
+        assertFalse(lobby.containsPlayer(player.getId()));
+        assertTrue(game.getPlayerHands().isEmpty());
+        assertTrue(game.getDeck().isEmpty());
     }
 
     @Test

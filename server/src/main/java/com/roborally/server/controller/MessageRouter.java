@@ -26,14 +26,16 @@ public class MessageRouter {
     private final ChatService chatService;
     private final GameService gameService;
     private final SessionManager sessionManager;
+    private final BoardLoader boardLoader;
 
     public MessageRouter(UserService userService, LobbyService lobbyService,
-            ChatService chatService, GameService gameService, SessionManager sessionManager) {
+            ChatService chatService, GameService gameService, SessionManager sessionManager, BoardLoader boardLoader) {
         this.userService = userService;
         this.lobbyService = lobbyService;
         this.chatService = chatService;
         this.gameService = gameService;
         this.sessionManager = sessionManager;
+        this.boardLoader = boardLoader;
     }
 
     /**
@@ -63,6 +65,7 @@ public class MessageRouter {
                 case UPDATE_LOBBY_SETTINGS -> handleUpdateLobbySettings(session, message);
                 case UPDATE_GAME_SETTINGS -> handleUpdateGameSettings(session, message);
                 case REQUEST_LOBBY_LIST -> handleRequestLobbyList(session);
+                case REQUEST_AVAILABLE_BOARDS -> handleRequestAvailableBoards(session);
 
                 // ── Chat ──
                 case CHAT_MESSAGE -> handleChatMessage(session, message);
@@ -267,6 +270,11 @@ public class MessageRouter {
     private void handleRequestLobbyList(WebSocketSession session) {
         sessionManager.sendMessage(session, Message.of(MessageType.LOBBY_LIST, Map.of(
                 "lobbies", lobbyService.getLobbyList())));
+    }
+
+    private void handleRequestAvailableBoards(WebSocketSession session) {
+        sessionManager.sendMessage(session, Message.of(MessageType.AVAILABLE_BOARDS, Map.of(
+                "boards", boardLoader.getAvailableBoards())));
     }
 
     // ══════════════════════════════════════════════════════

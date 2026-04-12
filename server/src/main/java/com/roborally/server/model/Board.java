@@ -69,7 +69,19 @@ public class Board {
     }
 
     public void addStartPosition(int x, int y) {
+        addStartPosition(x, y, true);
+    }
+
+    public void addStartPosition(int x, int y, boolean markTile) {
         startPositions.add(new int[] { x, y });
+        if (!markTile) {
+            return;
+        }
+
+        Tile tile = getTile(x, y);
+        if (tile != null) {
+            tile.setFieldType(FieldType.START);
+        }
     }
 
     public int getTotalCheckpoints() {

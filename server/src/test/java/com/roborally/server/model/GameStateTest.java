@@ -22,6 +22,8 @@ class GameStateTest {
     @Test
     void constructor_setsLobbyId() {
         assertEquals("lobby-1", game.getLobbyId());
+        assertNotNull(game.getGameInstanceId());
+        assertFalse(game.getGameInstanceId().isBlank());
     }
 
     @Test
@@ -65,6 +67,15 @@ class GameStateTest {
         game.addRobot(1L, r);
         assertSame(r, game.getRobot(1L));
         assertNull(game.getRobot(99L));
+    }
+
+    @Test
+    void removeRobot_removesTrackedRobot() {
+        Robot r = new Robot(1L, 0, 0, 0, Direction.NORTH);
+        game.addRobot(1L, r);
+
+        assertSame(r, game.removeRobot(1L));
+        assertNull(game.getRobot(1L));
     }
 
     @Test
@@ -149,6 +160,9 @@ class GameStateTest {
         game.markSubmitted(2L);
         assertTrue(game.allSubmitted());
 
+        game.clearSubmission(2L);
+        assertFalse(game.allSubmitted());
+
         game.clearSubmissions();
         assertTrue(game.getSubmittedPlayers().isEmpty());
     }
@@ -163,6 +177,7 @@ class GameStateTest {
 
         Map<String, Object> map = game.toMap();
         assertEquals("lobby-1", map.get("lobbyId"));
+        assertEquals(game.getGameInstanceId(), map.get("gameInstanceId"));
         assertEquals("PROGRAMMING", map.get("phase"));
         assertEquals(1, map.get("round"));
         assertNotNull(map.get("board"));

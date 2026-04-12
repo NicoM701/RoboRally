@@ -4,165 +4,232 @@ import com.roborally.common.enums.Direction;
 import com.roborally.common.enums.FieldType;
 import com.roborally.common.enums.RotationDirection;
 import com.roborally.server.model.*;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 
-/**
- * Loads board configurations from JSON resources.
- */
 @Component
 public class BoardLoader {
 
-    private static final Logger log = LoggerFactory.getLogger(BoardLoader.class);
-    private final ObjectMapper objectMapper = new ObjectMapper();
-
-    /**
-     * Load a board by name (e.g. "Plan B" → boards/plan_b.json).
-     */
     public Board loadBoard(String boardName) {
-        String fileName = "boards/" + boardName.toLowerCase().replace(" ", "_") + ".json";
-        try {
-            ClassPathResource resource = new ClassPathResource(fileName);
-            InputStream is = resource.getInputStream();
-            Map<String, Object> data = objectMapper.readValue(is, new TypeReference<>() {
-            });
-            return parseBoard(boardName, data);
-        } catch (IOException e) {
-            log.warn("Board file {} not found, creating default board", fileName);
-            return createDefaultBoard(boardName);
+        return createDefaultBoard(boardName);
+    }
+
+    public List<Map<String, Object>> getAvailableBoards() {
+        List<Map<String, Object>> list = new ArrayList<>();
+        List<String> names = List.of("map1", "map2", "map3", "map4", "map5", "map6");
+        for (String name : names) {
+            Board board = loadBoard(name);
+            Map<String, Object> boardMap = new LinkedHashMap<>();
+            boardMap.put("id", name);
+            boardMap.put("name", name);
+            boardMap.put("maxPlayers", board.getStartPositions().size());
+            boardMap.put("boardData", board.toMap());
+            list.add(boardMap);
+        }
+        return list;
+    }
+
+    public Board createDefaultBoard(String name) {
+        String normalizedName = name == null ? "map1" : name.toLowerCase(Locale.ROOT);
+        Board board = new Board(name, 12, 12);
+        LegacyBoardSpec legacyBoard = LegacyBoardSpecs.forName(normalizedName);
+
+        applyLegacyBoard(board, legacyBoard);
+        mirrorLegacyWalls(board);
+        addFallbackStartPositions(board, normalizedName);
+        board.setTotalCheckpoints(legacyBoard.totalCheckpoints());
+        return board;
+    }
+
+    private void applyLegacyBoard(Board board, LegacyBoardSpec legacyBoard) {
+        for (LegacyOp op : legacyBoard.ops()) {
+            switch (op.kind()) {
+                case WALL -> tileAtLegacy(board, op.x(), op.y()).addWall(directionFromLegacy(op.orientation()));
+                case PIT -> resetTile(tileAtLegacy(board, op.x(), op.y()), FieldType.PIT);
+                case REPAIR -> resetTile(tileAtLegacy(board, op.x(), op.y()),
+                        op.value() == 2 ? FieldType.REPAIR_2 : FieldType.REPAIR_1);
+                case CHECKPOINT -> applyCheckpoint(tileAtLegacy(board, op.x(), op.y()), op.value());
+                case CONVEYOR -> applyConveyor(tileAtLegacy(board, op.x(), op.y()),
+                        directionFromLegacy(op.orientation()), op.express());
+                case CURVE -> applyCurve(tileAtLegacy(board, op.x(), op.y()),
+                        directionFromLegacy(op.orientation()), op.value(), op.express());
+                case CROSSING -> applyCrossing(tileAtLegacy(board, op.x(), op.y()),
+                        directionFromLegacy(op.orientation()), op.value(), op.express());
+                case GEAR -> applyGear(tileAtLegacy(board, op.x(), op.y()), gearRotationFromLegacy(op.orientation()));
+                case PUSHER -> applyPusher(tileAtLegacy(board, op.x(), op.y()),
+                        directionFromLegacy(op.orientation()), op.value());
+                case PRESS -> applyPress(tileAtLegacy(board, op.x(), op.y()), op.value());
+                case LASER -> board.addLaser(new Laser(
+                        boardXFromLegacy(op.x()),
+                        boardYFromLegacy(board, op.y()),
+                        directionFromLegacy(op.orientation()),
+                        op.value()));
+            }
         }
     }
 
     /**
-     * Create a default 12×12 board with simple layout.
+     * Old Board.java uses {@code fields[x][y]} with the origin at the bottom-left.
+     *
+     * <p>The old JavaFX client rendered those fields with the same {@code x} coordinate and only flipped
+     * {@code y} on draw ({@code drawY = height - y - 1}). The clean adapter therefore is just a vertical flip:
+     * {@code legacy(x, y) -> board(x, height - 1 - y)}.</p>
      */
-    public Board createDefaultBoard(String name) {
-        Board board = new Board(name, 12, 12);
-
-        // Start positions (bottom row)
-        for (int x = 1; x <= 8; x++) {
-            board.getTile(x, 11).setFieldType(FieldType.START);
-            board.addStartPosition(x, 11);
-        }
-
-        // Some walls
-        board.getTile(3, 3).addWall(Direction.SOUTH);
-        board.getTile(3, 4).addWall(Direction.NORTH);
-        board.getTile(8, 3).addWall(Direction.SOUTH);
-        board.getTile(8, 4).addWall(Direction.NORTH);
-        board.getTile(5, 7).addWall(Direction.EAST);
-        board.getTile(6, 7).addWall(Direction.WEST);
-
-        // Conveyor belts (a simple lane going north)
-        for (int y = 9; y >= 2; y--) {
-            board.getTile(0, y).setConveyorBelt(new ConveyorBelt(Direction.NORTH, false));
-            board.getTile(11, y).setConveyorBelt(new ConveyorBelt(Direction.NORTH, true));
-        }
-
-        // Gears
-        board.getTile(4, 5).setGear(new Gear(RotationDirection.CLOCKWISE));
-        board.getTile(7, 5).setGear(new Gear(RotationDirection.COUNTERCLOCKWISE));
-
-        // Pits
-        board.getTile(0, 0).setFieldType(FieldType.PIT);
-        board.getTile(11, 0).setFieldType(FieldType.PIT);
-        board.getTile(5, 5).setFieldType(FieldType.PIT);
-        board.getTile(6, 5).setFieldType(FieldType.PIT);
-
-        // Repair fields
-        board.getTile(3, 8).setFieldType(FieldType.REPAIR_1);
-        board.getTile(8, 8).setFieldType(FieldType.REPAIR_1);
-
-        // Checkpoints
-        board.getTile(3, 2).setCheckpoint(new Checkpoint(1));
-        board.getTile(8, 2).setCheckpoint(new Checkpoint(2));
-        board.getTile(5, 0).setCheckpoint(new Checkpoint(3));
-        board.setTotalCheckpoints(3);
-
-        // Lasers
-        board.addLaser(new Laser(5, 0, Direction.SOUTH, 1));
-        board.addLaser(new Laser(6, 0, Direction.SOUTH, 1));
-
-        log.info("Created default board '{}' (12x12, {} checkpoints)", name, board.getTotalCheckpoints());
-        return board;
+    private int boardXFromLegacy(int legacyX) {
+        return legacyX;
     }
 
-    @SuppressWarnings("unchecked")
-    private Board parseBoard(String name, Map<String, Object> data) {
-        int width = (int) data.getOrDefault("width", 12);
-        int height = (int) data.getOrDefault("height", 12);
-        Board board = new Board(name, width, height);
+    private int boardYFromLegacy(Board board, int legacyY) {
+        return board.getHeight() - 1 - legacyY;
+    }
 
-        // Parse tiles
-        List<Map<String, Object>> tiles = (List<Map<String, Object>>) data.getOrDefault("tiles", List.of());
-        for (Map<String, Object> td : tiles) {
-            int x = (int) td.get("x");
-            int y = (int) td.get("y");
-            Tile tile = board.getTile(x, y);
-            if (tile == null)
-                continue;
+    private Tile tileAtLegacy(Board board, int legacyX, int legacyY) {
+        return board.getTile(boardXFromLegacy(legacyX), boardYFromLegacy(board, legacyY));
+    }
 
-            if (td.containsKey("type")) {
-                tile.setFieldType(FieldType.valueOf((String) td.get("type")));
-            }
-            if (td.containsKey("walls")) {
-                List<String> walls = (List<String>) td.get("walls");
-                walls.forEach(w -> tile.addWall(Direction.valueOf(w)));
-            }
-            if (td.containsKey("conveyorBelt")) {
-                Map<String, Object> cb = (Map<String, Object>) td.get("conveyorBelt");
-                Direction dir = Direction.valueOf((String) cb.get("direction"));
-                boolean express = Boolean.TRUE.equals(cb.get("express"));
-                Direction curveFrom = cb.containsKey("curveFrom") ? Direction.valueOf((String) cb.get("curveFrom"))
-                        : null;
-                tile.setConveyorBelt(new ConveyorBelt(dir, express, curveFrom));
-            }
-            if (td.containsKey("gear")) {
-                Map<String, Object> g = (Map<String, Object>) td.get("gear");
-                tile.setGear(new Gear(RotationDirection.valueOf((String) g.get("rotation"))));
-            }
-            if (td.containsKey("checkpoint")) {
-                Map<String, Object> cp = (Map<String, Object>) td.get("checkpoint");
-                tile.setCheckpoint(new Checkpoint((int) cp.get("number")));
-            }
-            if (td.containsKey("pusher")) {
-                Map<String, Object> p = (Map<String, Object>) td.get("pusher");
-                Direction dir = Direction.valueOf((String) p.get("direction"));
-                List<Integer> steps = (List<Integer>) p.get("steps");
-                tile.setPusher(new Pusher(dir, new HashSet<>(steps)));
-            }
-            if (td.containsKey("press")) {
-                Map<String, Object> p = (Map<String, Object>) td.get("press");
-                List<Integer> steps = (List<Integer>) p.get("steps");
-                tile.setPress(new Press(new HashSet<>(steps)));
-            }
+    private Direction directionFromLegacy(LegacyOrientation legacyOrientation) {
+        return switch (legacyOrientation) {
+            case LEFT -> Direction.WEST;
+            case RIGHT -> Direction.EAST;
+            case TOP -> Direction.NORTH;
+            case BOTTOM -> Direction.SOUTH;
+        };
+    }
 
-            // Mark start positions
-            if (tile.isStart())
-                board.addStartPosition(x, y);
+    private RotationDirection gearRotationFromLegacy(LegacyOrientation legacyOrientation) {
+        return switch (legacyOrientation) {
+            case LEFT, TOP -> RotationDirection.CLOCKWISE;
+            case RIGHT, BOTTOM -> RotationDirection.COUNTERCLOCKWISE;
+        };
+    }
+
+    private RotationDirection curveRotationFromLegacy(int legacyCurve) {
+        return legacyCurve == 2 ? RotationDirection.CLOCKWISE : RotationDirection.COUNTERCLOCKWISE;
+    }
+
+    private String crossingTypeFromLegacy(int legacyCrossing) {
+        return switch (legacyCrossing) {
+            case 2 -> "RIGHT";
+            case 3 -> "LEFTRIGHT";
+            default -> "LEFT";
+        };
+    }
+
+    private void resetTile(Tile tile, FieldType fieldType) {
+        tile.setFieldType(fieldType);
+        tile.setConveyorBelt(null);
+        tile.setGear(null);
+        tile.setPusher(null);
+        tile.setPress(null);
+        tile.setCheckpoint(null);
+    }
+
+    private void applyCheckpoint(Tile tile, int checkpointNumber) {
+        // Legacy maps can place checkpoints on top of conveyors, so only clear
+        // incompatible top-level elements instead of wiping the whole tile.
+        tile.setFieldType(FieldType.FLOOR);
+        tile.setGear(null);
+        tile.setPusher(null);
+        tile.setPress(null);
+        tile.setCheckpoint(new Checkpoint(checkpointNumber));
+    }
+
+    private void applyConveyor(Tile tile, Direction direction, boolean express) {
+        resetTile(tile, FieldType.FLOOR);
+        tile.setConveyorBelt(new ConveyorBelt(direction, express));
+    }
+
+    private void applyCurve(Tile tile, Direction direction, int legacyCurve, boolean express) {
+        ConveyorBelt conveyorBelt = new ConveyorBelt(direction, express);
+        conveyorBelt.setCurveRotation(curveRotationFromLegacy(legacyCurve));
+        resetTile(tile, FieldType.FLOOR);
+        tile.setConveyorBelt(conveyorBelt);
+    }
+
+    private void applyCrossing(Tile tile, Direction direction, int legacyCrossing, boolean express) {
+        ConveyorBelt conveyorBelt = new ConveyorBelt(direction, express);
+        conveyorBelt.setCrossingType(crossingTypeFromLegacy(legacyCrossing));
+        resetTile(tile, FieldType.FLOOR);
+        tile.setConveyorBelt(conveyorBelt);
+    }
+
+    private void applyGear(Tile tile, RotationDirection rotationDirection) {
+        resetTile(tile, FieldType.FLOOR);
+        tile.setGear(new Gear(rotationDirection));
+    }
+
+    private void applyPusher(Tile tile, Direction direction, int activeStep) {
+        resetTile(tile, FieldType.FLOOR);
+        tile.setPusher(new Pusher(direction, pusherStepsFromLegacy(activeStep)));
+    }
+
+    private void applyPress(Tile tile, int activeStep) {
+        resetTile(tile, FieldType.FLOOR);
+        tile.setPress(new Press(pressStepsFromLegacy(activeStep)));
+    }
+
+    private Set<Integer> pusherStepsFromLegacy(int legacyTurn) {
+        return switch (legacyTurn) {
+            case 1 -> Set.of(1);
+            case 2 -> Set.of(2);
+            case 3 -> Set.of(3);
+            case 4 -> Set.of(2, 4);
+            default -> Set.of(1, 3, 5);
+        };
+    }
+
+    private Set<Integer> pressStepsFromLegacy(int legacyRoundsActive) {
+        return switch (legacyRoundsActive) {
+            case 2, 4 -> Set.of(2, 4);
+            case 3 -> Set.of(3);
+            default -> Set.of(1, 5);
+        };
+    }
+
+    private void mirrorLegacyWalls(Board board) {
+        for (int y = 0; y < board.getHeight(); y++) {
+            for (int x = 0; x < board.getWidth(); x++) {
+                Tile tile = board.getTile(x, y);
+                for (Direction wall : tile.getWalls()) {
+                    Tile neighbor = board.getTile(x + wall.dx(), y - wall.dy());
+                    if (neighbor != null) {
+                        neighbor.addWall(wall.opposite());
+                    }
+                }
+            }
+        }
+    }
+
+    private void addFallbackStartPositions(Board board, String normalizedName) {
+        if (!board.getStartPositions().isEmpty()) {
+            return;
         }
 
-        // Parse lasers
-        List<Map<String, Object>> lasers = (List<Map<String, Object>>) data.getOrDefault("lasers", List.of());
-        for (Map<String, Object> ld : lasers) {
-            board.addLaser(new Laser(
-                    (int) ld.get("x"), (int) ld.get("y"),
-                    Direction.valueOf((String) ld.get("direction")),
-                    (int) ld.getOrDefault("strength", 1)));
+        int maxSpawns = 8;
+        if (normalizedName.equals("map1") || normalizedName.equals("map2")) {
+            maxSpawns = 2;
+        } else if (normalizedName.equals("map3") || normalizedName.equals("map4")) {
+            maxSpawns = 4;
         }
 
-        board.setTotalCheckpoints((int) data.getOrDefault("totalCheckpoints",
-                tiles.stream().filter(t -> t.containsKey("checkpoint")).count()));
+        boolean markStartTiles = !isLegacyNamedMap(normalizedName);
+        for (int x = 1; x <= maxSpawns; x++) {
+            board.addStartPosition(x, 11, markStartTiles);
+        }
+    }
 
-        log.info("Loaded board '{}' ({}x{}, {} checkpoints)", name, width, height, board.getTotalCheckpoints());
-        return board;
+    private boolean isLegacyNamedMap(String normalizedName) {
+        return normalizedName.equals("map1")
+                || normalizedName.equals("map2")
+                || normalizedName.equals("map3")
+                || normalizedName.equals("map4")
+                || normalizedName.equals("map5")
+                || normalizedName.equals("map6");
     }
 }

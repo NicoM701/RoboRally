@@ -277,6 +277,11 @@ button {
     color: var(--text-muted);
 }
 
+.form-group select option {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
 .form-divider {
     display: flex;
     align-items: center;
@@ -813,6 +818,11 @@ button {
     color: var(--accent-warning);
 }
 
+.player-badge.you {
+    background: rgba(52, 152, 219, 0.18);
+    color: #7ec8ff;
+}
+
 .lobby-settings-section {
     flex: 1;
     padding: 24px;
@@ -851,16 +861,31 @@ button {
 .game-container {
     display: flex;
     flex: 1;
+    min-height: 0;
     overflow: hidden;
 }
 
-#game-board-canvas {
+#game-board-area {
     flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: auto;
     background: #0d1117;
+    padding: 16px;
+}
+
+#game-board-canvas {
+    flex: 0 0 auto;
+    display: block;
+    background: #0d1117;
+    image-rendering: pixelated;
 }
 
 #game-sidebar {
-    width: 340px;
+    width: 380px;
     display: flex;
     flex-direction: column;
     background: var(--bg-card);
@@ -887,40 +912,404 @@ button {
 }
 
 /* ─── Game Info Panel ────────────────────────────────── */
-.game-phase-indicator {
-    font-size: 13px;
-    color: var(--text-secondary);
-    margin-bottom: 12px;
-    padding: 8px 12px;
-    background: var(--bg-glass);
-    border-radius: var(--radius-sm);
+.game-command-center {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
 }
 
-.game-phase-indicator strong {
+.phase-hero,
+.game-section {
+    background: var(--bg-glass);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 14px;
+}
+
+.phase-hero {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.phase-title-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+}
+
+.phase-title-row h3 {
+    font-family: var(--font-display);
+    font-size: 0.95rem;
+    letter-spacing: 1px;
+}
+
+.phase-badge,
+.register-pill,
+.pilot-chip,
+.event-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    font-weight: 700;
+    text-transform: uppercase;
+    border-radius: 999px;
+    padding: 5px 9px;
+}
+
+.phase-badge {
+    width: fit-content;
+    background: rgba(131, 56, 236, 0.18);
+    color: #d4b3ff;
+}
+
+.register-pill {
+    background: rgba(6, 214, 160, 0.16);
     color: var(--accent-primary);
+}
+
+.phase-copy {
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.phase-focus-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.focus-card {
+    padding: 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.focus-card strong {
+    display: block;
+    color: var(--text-primary);
+    margin-bottom: 6px;
+    font-size: 13px;
+}
+
+.focus-card p {
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.focus-label {
+    display: inline-block;
+    margin-bottom: 8px;
+    color: var(--text-muted);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    font-weight: 700;
+}
+
+.focus-card.success {
+    border-color: rgba(6, 214, 160, 0.28);
+    background: rgba(6, 214, 160, 0.09);
+}
+
+.focus-card.warning {
+    border-color: rgba(255, 209, 102, 0.26);
+    background: rgba(255, 209, 102, 0.09);
+}
+
+.focus-card.info {
+    border-color: rgba(17, 138, 178, 0.22);
+    background: rgba(17, 138, 178, 0.08);
+}
+
+.phase-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 10px;
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+.timer-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.timer-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.timer-row strong {
+    color: var(--text-primary);
+    font-family: var(--font-display);
+    letter-spacing: 1px;
+}
+
+.timer-track {
+    height: 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.06);
+    overflow: hidden;
+}
+
+.timer-fill {
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, var(--accent-primary), #19c37d);
+    transition: width 200ms linear;
+}
+
+.timer-fill.warning {
+    background: linear-gradient(90deg, var(--accent-warning), #f39c12);
+}
+
+.timer-fill.danger {
+    background: linear-gradient(90deg, var(--accent-danger), #ff8fab);
+}
+
+.register-track-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.025);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.register-steps {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.register-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 6px;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--text-muted);
+}
+
+.register-step small {
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
+.register-step-index {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-primary);
+}
+
+.register-step.done {
+    border-color: rgba(6, 214, 160, 0.22);
+    background: rgba(6, 214, 160, 0.08);
+}
+
+.register-step.done .register-step-index,
+.register-step.current .register-step-index,
+.register-step.planning .register-step-index {
+    color: #0a0e17;
+}
+
+.register-step.done .register-step-index {
+    background: rgba(6, 214, 160, 0.9);
+}
+
+.register-step.current {
+    border-color: rgba(255, 209, 102, 0.32);
+    background: rgba(255, 209, 102, 0.12);
+    box-shadow: 0 0 0 1px rgba(255, 209, 102, 0.12);
+}
+
+.register-step.current .register-step-index {
+    background: rgba(255, 209, 102, 0.92);
+}
+
+.register-step.planning {
+    border-style: dashed;
+}
+
+.register-step.planning .register-step-index {
+    background: rgba(17, 138, 178, 0.88);
+}
+
+.section-kicker {
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+    font-weight: 700;
+}
+
+.pilot-card.empty {
+    color: var(--text-muted);
+}
+
+.pilot-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.pilot-chip {
+    background: rgba(6, 214, 160, 0.16);
+    color: var(--pilot-accent, var(--accent-primary));
+}
+
+.pilot-subtitle {
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.pilot-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.pilot-callout {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    line-height: 1.45;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.pilot-callout.success {
+    border-color: rgba(6, 214, 160, 0.28);
+    background: rgba(6, 214, 160, 0.09);
+}
+
+.pilot-callout.warning {
+    border-color: rgba(255, 209, 102, 0.24);
+    background: rgba(255, 209, 102, 0.09);
+}
+
+.pilot-callout.info {
+    border-color: rgba(17, 138, 178, 0.22);
+    background: rgba(17, 138, 178, 0.08);
 }
 
 .robot-status-list {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
 }
 
 .robot-status {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 8px 12px;
-    background: var(--bg-glass);
+    gap: 10px;
+    padding: 10px 12px;
+    background: rgba(255, 255, 255, 0.03);
     border-radius: var(--radius-sm);
     font-size: 12px;
     color: var(--text-secondary);
+    border: 1px solid transparent;
+}
+
+.robot-status.you {
+    border-color: var(--robot-accent);
+    box-shadow: 0 0 0 1px rgba(6, 214, 160, 0.12);
+}
+
+.robot-status-main {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.robot-swatch {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--robot-accent);
+    box-shadow: 0 0 10px rgba(255, 255, 255, 0.12);
 }
 
 .robot-status .robot-name {
     font-weight: 600;
     color: var(--text-primary);
     font-size: 13px;
+}
+
+.robot-status-sub {
+    color: var(--text-muted);
+    font-size: 11px;
+    margin-top: 2px;
+}
+
+.robot-status-meta {
+    text-align: right;
+    white-space: nowrap;
+}
+
+.event-log {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.event-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.event-item.empty {
+    color: var(--text-muted);
+}
+
+.event-pill.info {
+    background: rgba(131, 56, 236, 0.16);
+    color: #d4b3ff;
+}
+
+.event-pill.exec {
+    background: rgba(6, 214, 160, 0.16);
+    color: var(--accent-primary);
+}
+
+.event-pill.programming {
+    background: rgba(255, 209, 102, 0.16);
+    color: var(--accent-warning);
 }
 
 /* ─── Card Hand ──────────────────────────────────────── */
@@ -936,6 +1325,26 @@ button {
     font-family: var(--font-body);
     color: var(--text-muted);
     font-size: 11px;
+}
+
+.card-status-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.card-status-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
 }
 
 .card-hand {
@@ -1007,6 +1416,67 @@ button {
     display: flex;
     align-items: center;
     justify-content: center;
+}
+
+.programming-summary,
+.card-hand-empty {
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.programming-summary {
+    margin-bottom: 10px;
+}
+
+.programming-summary.emphasis {
+    border-color: rgba(17, 138, 178, 0.24);
+    background: rgba(17, 138, 178, 0.08);
+}
+
+.card-hand-empty strong {
+    display: block;
+    color: var(--text-primary);
+    margin-bottom: 6px;
+}
+
+.program-plan {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.program-slot-preview {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 10px;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+}
+
+.slot-index {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(6, 214, 160, 0.16);
+    color: var(--accent-primary);
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.program-slot-preview small {
+    color: var(--text-muted);
+    line-height: 1.25;
 }
 
 .btn-submit-program {
@@ -1124,6 +1594,14 @@ button {
 @media (max-width: 900px) {
     .chat-panel {
         display: none;
+    }
+
+    .phase-focus-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .register-steps {
+        grid-template-columns: repeat(5, minmax(52px, 1fr));
     }
 
     .lobby-room-content {
