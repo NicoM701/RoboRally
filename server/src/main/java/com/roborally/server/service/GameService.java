@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class GameService {
 
     private static final Logger log = LoggerFactory.getLogger(GameService.class);
-    private static final int PROGRAMMING_TIMEOUT_SECONDS = 30;
+    private static final int DEFAULT_PROGRAMMING_TIMEOUT_SECONDS = 60;
 
     private final CardService cardService;
     private final BoardLoader boardLoader;
@@ -37,6 +37,7 @@ public class GameService {
     // Timer for programming phase
     private final ScheduledThreadPoolExecutor scheduler = createScheduler();
     private final Map<String, ScheduledFuture<?>> timers = new ConcurrentHashMap<>();
+    private final Map<String, Long> programmingDeadlines = new ConcurrentHashMap<>();
 
     public GameService(CardService cardService, BoardLoader boardLoader,
             MovementService movementService, LobbyService lobbyService,
@@ -173,10 +174,25 @@ public class GameService {
         game.setPhase(GamePhase.DEALING_CARDS);
         game.clearSubmissions();
 
+        int timerSeconds = resolveProgrammingTimeoutSeconds(game);
+
         // Deal cards to each active robot
         for (Robot robot : game.getActiveRobots()) {
             List<ProgramCard> hand = cardService.deal(game.getDeck(), game.getDiscardPile(), robot);
             game.getPlayerHands().put(robot.getPlayerId(), hand);
+        }
+
+        // Move to programming phase and start the real timer before broadcasting
+        game.setPhase(GamePhase.PROGRAMMING);
+        Long deadlineEpochMs = timerEnabled
+                ? startProgrammingTimer(game, timerSeconds)
+                : null;
+        if (!timerEnabled) {
+            cancelTimer(game.getLobbyId());
+        }
+
+        for (Robot robot : game.getActiveRobots()) {
+            List<ProgramCard> hand = game.getHand(robot.getPlayerId());
 
             // Send hand to player
             String sessionId = userService.getSessionIdByUserId(robot.getPlayerId());
@@ -190,21 +206,24 @@ public class GameService {
                     return cm;
                 }).toList();
 
-                sessionManager.sendToSession(sessionId, Message.of(MessageType.CARDS_DEALT, Map.of(
-                        "cards", handData,
-                        "blockedSlots", robot.getBlockedSlots(),
-                        "round", game.getRound())));
+                Map<String, Object> dealtPayload = new LinkedHashMap<>();
+                dealtPayload.put("lobbyId", game.getLobbyId());
+                dealtPayload.put("gameInstanceId", game.getGameInstanceId());
+                dealtPayload.put("cards", handData);
+                dealtPayload.put("blockedSlots", robot.getBlockedSlots());
+                dealtPayload.put("round", game.getRound());
+                dealtPayload.put("timerEnabled", timerEnabled);
+                dealtPayload.put("timerSeconds", timerSeconds);
+                if (deadlineEpochMs != null) {
+                    dealtPayload.put("deadlineEpochMs", deadlineEpochMs);
+                }
+
+                sessionManager.sendToSession(sessionId, Message.of(MessageType.CARDS_DEALT, dealtPayload));
             }
         }
 
-        // Move to programming phase
-        game.setPhase(GamePhase.PROGRAMMING);
+        broadcastProgrammingPhaseStart(game, timerEnabled, timerSeconds, deadlineEpochMs, null, null);
         broadcastPhaseUpdate(game, "PROGRAMMING");
-
-        // Start programming timer
-        if (timerEnabled) {
-            startProgrammingTimer(game);
-        }
 
         log.info("Round {} started - cards dealt to {} players", game.getRound(), game.getActiveRobots().size());
     }
@@ -274,8 +293,11 @@ public class GameService {
         if (sessionId != null) {
             sessionManager.sendToSession(sessionId, Message.of(MessageType.PROGRAMMING_PHASE_START, Map.of(
                     "status", "submitted",
-                    "message", "Programm eingereicht!")));
+                    "message", "Programm eingereicht!",
+                    "lobbyId", game.getLobbyId(),
+                    "gameInstanceId", game.getGameInstanceId())));
         }
+        broadcastProgrammingProgress(game, playerId);
 
             log.info("Player {} submitted program for round {}", playerId, game.getRound());
 
@@ -311,10 +333,11 @@ public class GameService {
             checkCheckpoints(game);
 
             // Broadcast step result for client animation
-            broadcastToGame(game, Message.of(MessageType.EXECUTION_STEP, Map.of(
+            broadcastToGame(game, Message.of(MessageType.EXECUTION_STEP, createGamePayload(game, Map.of(
+                    "round", game.getRound(),
                     "step", step + 1,
                     "results", stepResults,
-                    "robots", getRobotStates(game))));
+                    "robots", getRobotStates(game)))));
 
             // Check for game over immediately after evaluating checkpoints
             for (Robot robot : game.getRobots().values()) {
@@ -415,8 +438,8 @@ public class GameService {
         String winnerName = userService.getUserById(winnerId)
                 .map(u -> u.getUsername()).orElse("???");
 
-        broadcastToGame(game, Message.of(MessageType.GAME_OVER, Map.of(
-                "winners", List.of(Map.of("userId", winnerId, "username", winnerName)))));
+        broadcastToGame(game, Message.of(MessageType.GAME_OVER, createGamePayload(game, Map.of(
+                "winners", List.of(Map.of("userId", winnerId, "username", winnerName))))));
 
         log.info("Game over! Winner: {} (ID: {})", winnerName, winnerId);
         cleanupGame(game);
@@ -430,8 +453,8 @@ public class GameService {
         game.setPhase(GamePhase.GAME_OVER);
         cancelTimer(game.getLobbyId());
 
-        broadcastToGame(game, Message.of(MessageType.GAME_OVER, Map.of(
-                "winners", List.of())));
+        broadcastToGame(game, Message.of(MessageType.GAME_OVER, createGamePayload(game, Map.of(
+                "winners", List.of()))));
 
         log.info("Game over! All robots destroyed — draw.");
         cleanupGame(game);
@@ -462,8 +485,10 @@ public class GameService {
     // Timer
     // ══════════════════════════════════════════════════════
 
-    private void startProgrammingTimer(GameState game) {
+    private Long startProgrammingTimer(GameState game, int timeoutSeconds) {
         cancelTimer(game.getLobbyId());
+        Long deadlineEpochMs = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(timeoutSeconds);
+        programmingDeadlines.put(game.getLobbyId(), deadlineEpochMs);
         ScheduledFuture<?> timer = scheduler.schedule(() -> {
             synchronized (game) {
                 if (!isGameActive(game)) {
@@ -476,12 +501,61 @@ public class GameService {
                     startExecutionPhase(game);
                 }
             }
-        }, PROGRAMMING_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        }, timeoutSeconds, TimeUnit.SECONDS);
         timers.put(game.getLobbyId(), timer);
+        return deadlineEpochMs;
+    }
+
+    private int resolveProgrammingTimeoutSeconds(GameState game) {
+        Lobby lobby = lobbyService.getLobbyById(game.getLobbyId());
+        if (lobby == null) {
+            return DEFAULT_PROGRAMMING_TIMEOUT_SECONDS;
+        }
+
+        Object configuredTimeout = lobby.getGameSettings().get("timerSeconds");
+        if (configuredTimeout instanceof Number number && number.intValue() > 0) {
+            return number.intValue();
+        }
+
+        return DEFAULT_PROGRAMMING_TIMEOUT_SECONDS;
+    }
+
+    private void broadcastProgrammingPhaseStart(GameState game, boolean timerEnabled, int timerSeconds,
+            Long deadlineEpochMs, Long submittedPlayerId, String submittedUsername) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("lobbyId", game.getLobbyId());
+        payload.put("gameInstanceId", game.getGameInstanceId());
+        payload.put("status", submittedPlayerId == null ? "started" : "progress");
+        payload.put("phase", "PROGRAMMING");
+        payload.put("round", game.getRound());
+        payload.put("timerEnabled", timerEnabled);
+        payload.put("timerSeconds", timerSeconds);
+        payload.put("deadlineEpochMs", deadlineEpochMs);
+        payload.put("submittedCount", game.getSubmittedPlayers().size());
+        payload.put("totalPlayers", game.getActiveRobots().size());
+        if (submittedPlayerId != null) {
+            payload.put("submittedPlayerId", submittedPlayerId);
+        }
+        if (submittedUsername != null) {
+            payload.put("submittedUsername", submittedUsername);
+        }
+        broadcastToGame(game, Message.of(MessageType.PROGRAMMING_PHASE_START, payload));
+    }
+
+    private void broadcastProgrammingProgress(GameState game, Long submittedPlayerId) {
+        Long deadlineEpochMs = programmingDeadlines.get(game.getLobbyId());
+        Lobby lobby = lobbyService.getLobbyById(game.getLobbyId());
+        boolean timerEnabled = lobby == null || Boolean.TRUE.equals(lobby.getGameSettings().get("timerEnabled"));
+        int timerSeconds = resolveProgrammingTimeoutSeconds(game);
+        String submittedUsername = submittedPlayerId == null ? null
+                : userService.getUserById(submittedPlayerId).map(User::getUsername).orElse("???");
+        broadcastProgrammingPhaseStart(game, timerEnabled, timerSeconds, deadlineEpochMs, submittedPlayerId,
+                submittedUsername);
     }
 
     private void cancelTimer(String lobbyId) {
         ScheduledFuture<?> timer = timers.remove(lobbyId);
+        programmingDeadlines.remove(lobbyId);
         if (timer != null)
             timer.cancel(false);
     }
@@ -594,8 +668,16 @@ public class GameService {
     }
 
     private void broadcastPhaseUpdate(GameState game, String phase) {
-        broadcastToGame(game, Message.of(MessageType.GAME_STATE, Map.of(
-                "phase", phase, "round", game.getRound())));
+        broadcastToGame(game, Message.of(MessageType.GAME_STATE, createGamePayload(game, Map.of(
+                "phase", phase, "round", game.getRound()))));
+    }
+
+    private Map<String, Object> createGamePayload(GameState game, Map<String, Object> payload) {
+        Map<String, Object> message = new LinkedHashMap<>();
+        message.put("lobbyId", game.getLobbyId());
+        message.put("gameInstanceId", game.getGameInstanceId());
+        message.putAll(payload);
+        return message;
     }
 
     private void broadcastToGame(GameState game, Message message) {

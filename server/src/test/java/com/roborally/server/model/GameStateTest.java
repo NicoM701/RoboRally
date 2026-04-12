@@ -22,6 +22,8 @@ class GameStateTest {
     @Test
     void constructor_setsLobbyId() {
         assertEquals("lobby-1", game.getLobbyId());
+        assertNotNull(game.getGameInstanceId());
+        assertFalse(game.getGameInstanceId().isBlank());
     }
 
     @Test
@@ -163,6 +165,7 @@ class GameStateTest {
 
         Map<String, Object> map = game.toMap();
         assertEquals("lobby-1", map.get("lobbyId"));
+        assertEquals(game.getGameInstanceId(), map.get("gameInstanceId"));
         assertEquals("PROGRAMMING", map.get("phase"));
         assertEquals(1, map.get("round"));
         assertNotNull(map.get("board"));
