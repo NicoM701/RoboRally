@@ -6,6 +6,7 @@ import com.roborally.common.enums.MessageType;
 import org.junit.jupiter.api.*;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
+import org.springframework.web.socket.CloseStatus;
 
 import java.io.IOException;
 import java.util.Set;
@@ -160,5 +161,20 @@ class SessionManagerTest {
 
         // Should not throw
         assertDoesNotThrow(() -> sessionManager.sendMessage(session, Message.error("test")));
+    }
+
+    @Test
+    @DisplayName("shutdown: closes open sessions and clears registry")
+    void shutdown_closesOpenSessions() throws IOException {
+        WebSocketSession openSession = mockSession("s1", true);
+        WebSocketSession closedSession = mockSession("s2", false);
+        sessionManager.addSession(openSession);
+        sessionManager.addSession(closedSession);
+
+        sessionManager.shutdown();
+
+        verify(openSession).close(CloseStatus.GOING_AWAY);
+        verify(closedSession, never()).close(any());
+        assertEquals(0, sessionManager.getActiveSessionCount());
     }
 }
