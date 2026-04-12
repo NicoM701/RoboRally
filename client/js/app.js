@@ -1393,6 +1393,12 @@ const App = (() => {
         renderEndScreen(data);
     }
 
+    function configureCanvasForBoardRendering(ctx) {
+        if (!ctx) return;
+        // Keep scaled pixel-art overlays crisp in the small lobby preview.
+        ctx.imageSmoothingEnabled = false;
+    }
+
     function renderBoard() {
         const canvas = document.getElementById('game-board-canvas');
         if (!canvas || !gameState) return;
@@ -1404,6 +1410,7 @@ const App = (() => {
 
         canvas.width = w * TILE_SIZE;
         canvas.height = h * TILE_SIZE;
+        configureCanvasForBoardRendering(ctx);
 
         const defaultFloor = getAsset('/assets/fields/DEFAULT_TOP.png');
         for (let y = 0; y < h; y++) {
@@ -1836,6 +1843,7 @@ const App = (() => {
 
         canvas.width = w * PREVIEW_TILE_SIZE;
         canvas.height = h * PREVIEW_TILE_SIZE;
+        configureCanvasForBoardRendering(ctx);
 
         const defaultFloor = getAsset('/assets/fields/DEFAULT_TOP.png');
         for (let y = 0; y < h; y++) {
