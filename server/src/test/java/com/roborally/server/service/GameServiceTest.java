@@ -7,13 +7,16 @@ import com.roborally.common.enums.MessageType;
 import com.roborally.common.protocol.Message;
 import com.roborally.server.model.*;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.*;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.lang.reflect.Field;
 import java.util.*;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -47,6 +50,11 @@ class GameServiceTest {
     void setUp() {
         lobby = new Lobby("lobby-1", "TestLobby", 1L, 4);
         lobby.addPlayer(2L);
+    }
+
+    @AfterEach
+    void tearDown() {
+        gameService.shutdown();
     }
 
     // ═══════════════════════════════════════
@@ -625,6 +633,41 @@ class GameServiceTest {
         assertEquals(Integer.valueOf(2), teamProgress.get("totalPlayers"));
         assertEquals(Long.valueOf(1L), teamProgress.get("submittedPlayerId"));
         assertEquals("Alice", teamProgress.get("submittedUsername"));
+    }
+
+    @Test
+    void handlePlayerDeparture_activeGame_abortsAndCleansUp() {
+        GameState game = startTestGame();
+        when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
+        when(userService.getSessionIdByUserId(1L)).thenReturn("session-1");
+        when(userService.getSessionIdByUserId(2L)).thenReturn("session-2");
+        when(lobbyService.getLobbyById(lobby.getId())).thenReturn(lobby);
+
+        gameService.handlePlayerDeparture(1L);
+
+        assertNull(gameService.getGame(lobby.getId()));
+        assertFalse(game.isActive());
+        assertEquals(Lobby.LobbyStatus.WAITING, lobby.getStatus());
+        assertTrue(game.getPlayerHands().isEmpty());
+        assertTrue(game.getDeck().isEmpty());
+        verify(sessionManager).sendToSession(eq("session-1"), argThat(m -> m.getType() == com.roborally.common.enums.MessageType.ERROR));
+        verify(sessionManager).sendToSession(eq("session-2"), argThat(m -> m.getType() == com.roborally.common.enums.MessageType.ERROR));
+    }
+
+    @Test
+    void shutdown_cleansGamesTimersAndScheduler() {
+        lobby.getGameSettings().put("timerEnabled", true);
+        GameState game = startTestGame();
+
+        gameService.shutdown();
+
+        assertNull(gameService.getGame(lobby.getId()));
+        assertFalse(game.isActive());
+        assertTrue(((Map<?, ?>) ReflectionTestUtils.getField(gameService, "timers")).isEmpty());
+        ScheduledThreadPoolExecutor scheduler =
+                (ScheduledThreadPoolExecutor) ReflectionTestUtils.getField(gameService, "scheduler");
+        assertNotNull(scheduler);
+        assertTrue(scheduler.isShutdown());
     }
 
     @Test

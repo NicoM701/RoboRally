@@ -366,7 +366,13 @@ const App = (() => {
         RoboSocket.on('LOBBY_UPDATE', (data) => {
             currentLobby = data.lobby || data;
             renderLobbyRoom(currentLobby);
-            if (currentScreen === 'menu') {
+            if (currentScreen === 'game') {
+                gameState = null;
+                dealtCards = [];
+                selectedCards = [];
+                blockedSlots = 0;
+                showScreen('lobby');
+            } else if (currentScreen === 'menu') {
                 showScreen('lobby');
             }
         });

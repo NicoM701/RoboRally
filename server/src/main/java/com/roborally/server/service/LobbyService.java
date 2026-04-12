@@ -7,6 +7,7 @@ import com.roborally.server.model.Lobby;
 import com.roborally.server.model.User;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -30,11 +31,14 @@ public class LobbyService {
     private final SessionManager sessionManager;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
     private final BoardLoader boardLoader;
+    private final GameService gameService;
 
-    public LobbyService(UserService userService, SessionManager sessionManager, BoardLoader boardLoader) {
+    public LobbyService(UserService userService, SessionManager sessionManager, BoardLoader boardLoader,
+            @Lazy GameService gameService) {
         this.userService = userService;
         this.sessionManager = sessionManager;
         this.boardLoader = boardLoader;
+        this.gameService = gameService;
     }
 
     // ─── Create ─────────────────────────────────────────
@@ -128,25 +132,34 @@ public class LobbyService {
         }
 
         String username = getUsernameById(userId);
-        
+        boolean closeLobby = false;
+
         synchronized (lobby) {
+            if (!lobby.containsPlayer(userId)) {
+                userLobbyMap.remove(userId);
+                return;
+            }
+
             lobby.removePlayer(userId);
             userLobbyMap.remove(userId);
-        }
 
-        log.info("User {} left lobby '{}'", username, lobby.getName());
+            gameService.abortActiveGameForLobbyDeparture(lobbyId, userId);
 
-        if (lobby.getPlayerCount() == 0) {
-            // Last player left → close lobby
-            closeLobby(lobbyId);
-        } else {
-            // Transfer host if host left
-            if (lobby.isHost(userId)) {
+            if (lobby.getPlayerCount() == 0) {
+                closeLobby = true;
+            } else if (lobby.isHost(userId)) {
                 Long newHost = lobby.getPlayerIds().get(0);
                 lobby.setHostUserId(newHost);
                 log.info("Host transferred to user {} in lobby '{}'", getUsernameById(newHost), lobby.getName());
             }
+        }
 
+        log.info("User {} left lobby '{}'", username, lobby.getName());
+
+        if (closeLobby) {
+            // Last player left → close lobby
+            closeLobby(lobbyId);
+        } else {
             broadcastToLobby(lobby, Message.of(MessageType.PLAYER_LEFT, Map.of(
                     "userId", userId,
                     "username", username)));
@@ -177,6 +190,7 @@ public class LobbyService {
 
             lobby.removePlayer(targetUserId);
             userLobbyMap.remove(targetUserId);
+            gameService.abortActiveGameForLobbyDeparture(lobbyId, targetUserId);
         }
 
         String kickedName = getUsernameById(targetUserId);

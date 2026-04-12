@@ -9,8 +9,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import jakarta.annotation.PreDestroy;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Manages game lifecycle: start, deal cards, program submission, execution,
@@ -33,7 +35,7 @@ public class GameService {
     private final Map<String, GameState> games = new ConcurrentHashMap<>();
 
     // Timer for programming phase
-    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
+    private final ScheduledThreadPoolExecutor scheduler = createScheduler();
     private final Map<String, ScheduledFuture<?>> timers = new ConcurrentHashMap<>();
     private final Map<String, Long> programmingDeadlines = new ConcurrentHashMap<>();
 
@@ -46,6 +48,19 @@ public class GameService {
         this.lobbyService = lobbyService;
         this.userService = userService;
         this.sessionManager = sessionManager;
+    }
+
+    private ScheduledThreadPoolExecutor createScheduler() {
+        AtomicInteger threadCounter = new AtomicInteger(1);
+        ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(2, runnable -> {
+            Thread thread = new Thread(runnable, "roborally-game-timer-" + threadCounter.getAndIncrement());
+            thread.setDaemon(true);
+            return thread;
+        });
+        executor.setRemoveOnCancelPolicy(true);
+        executor.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
+        executor.setContinueExistingPeriodicTasksAfterShutdownPolicy(false);
+        return executor;
     }
 
     // ══════════════════════════════════════════════════════
@@ -151,6 +166,10 @@ public class GameService {
      * Deal cards to all alive robots.
      */
     private void startDealPhase(GameState game, boolean timerEnabled) {
+        if (!isGameActive(game)) {
+            return;
+        }
+
         game.nextRound();
         game.setPhase(GamePhase.DEALING_CARDS);
         game.clearSubmissions();
@@ -218,6 +237,8 @@ public class GameService {
             throw new IllegalArgumentException("Du bist in keinem Spiel.");
             
         synchronized (game) {
+            if (!isGameActive(game))
+                throw new IllegalArgumentException("Das Spiel läuft nicht mehr.");
             if (game.getPhase() != GamePhase.PROGRAMMING)
                 throw new IllegalArgumentException("Nicht in der Programmierphase.");
             if (game.getSubmittedPlayers().contains(playerId))
@@ -293,6 +314,10 @@ public class GameService {
     // ══════════════════════════════════════════════════════
 
     private void startExecutionPhase(GameState game) {
+        if (!isGameActive(game)) {
+            return;
+        }
+
         game.setPhase(GamePhase.EXECUTING);
         log.info("All programs submitted. Starting execution phase for round {}", game.getRound());
         broadcastPhaseUpdate(game, "EXECUTING");
@@ -374,6 +399,10 @@ public class GameService {
     }
 
     private void performCleanupPhase(GameState game) {
+        if (!isGameActive(game)) {
+            return;
+        }
+
         game.setPhase(GamePhase.ROUND_CLEANUP);
 
         // Collect used cards
@@ -399,6 +428,10 @@ public class GameService {
     }
 
     private void endGame(GameState game, Long winnerId) {
+        if (!isGameActive(game)) {
+            return;
+        }
+
         game.setPhase(GamePhase.GAME_OVER);
         cancelTimer(game.getLobbyId());
 
@@ -413,6 +446,10 @@ public class GameService {
     }
 
     private void endGameDraw(GameState game) {
+        if (!isGameActive(game)) {
+            return;
+        }
+
         game.setPhase(GamePhase.GAME_OVER);
         cancelTimer(game.getLobbyId());
 
@@ -424,10 +461,23 @@ public class GameService {
     }
 
     private void cleanupGame(GameState game) {
-        games.remove(game.getLobbyId());
+        cleanupRuntimeState(game);
+        games.remove(game.getLobbyId(), game);
         Lobby lobby = lobbyService.getLobbyById(game.getLobbyId());
         if (lobby != null) {
             lobby.setStatus(Lobby.LobbyStatus.WAITING);
+        }
+    }
+
+    private void cleanupRuntimeState(GameState game) {
+        game.deactivate();
+        cancelTimer(game.getLobbyId());
+        game.clearSubmissions();
+        game.getPlayerHands().clear();
+        game.getDeck().clear();
+        game.getDiscardPile().clear();
+        for (Robot robot : game.getRobots().values()) {
+            robot.clearProgram();
         }
     }
 
@@ -441,6 +491,10 @@ public class GameService {
         programmingDeadlines.put(game.getLobbyId(), deadlineEpochMs);
         ScheduledFuture<?> timer = scheduler.schedule(() -> {
             synchronized (game) {
+                if (!isGameActive(game)) {
+                    log.debug("Skipping expired timer for inactive lobby {}", game.getLobbyId());
+                    return;
+                }
                 log.info("Programming timer expired for lobby {}", game.getLobbyId());
                 autoSubmitMissing(game);
                 if (game.allSubmitted()) {
@@ -510,6 +564,10 @@ public class GameService {
      * Auto-submit random programs for players who didn't submit in time.
      */
     private void autoSubmitMissing(GameState game) {
+        if (!isGameActive(game)) {
+            return;
+        }
+
         for (Robot robot : game.getActiveRobots()) {
             if (!game.getSubmittedPlayers().contains(robot.getPlayerId())) {
                 List<ProgramCard> hand = game.getHand(robot.getPlayerId());
@@ -540,6 +598,65 @@ public class GameService {
         if (lobby == null)
             return null;
         return games.get(lobby.getId());
+    }
+
+    public void handlePlayerDeparture(Long playerId) {
+        Lobby lobby = lobbyService.getLobbyByUserId(playerId);
+        if (lobby == null) {
+            return;
+        }
+
+        abortActiveGameForLobbyDeparture(lobby.getId(), playerId);
+    }
+
+    public void abortActiveGameForLobbyDeparture(String lobbyId, Long playerId) {
+        if (lobbyId == null) {
+            return;
+        }
+
+        GameState game = games.get(lobbyId);
+        if (game == null) {
+            return;
+        }
+
+        Lobby lobby = lobbyService.getLobbyById(lobbyId);
+        String lobbyName = lobby != null ? lobby.getName() : lobbyId;
+
+        synchronized (game) {
+            if (!isGameActive(game)) {
+                return;
+            }
+
+            log.info("Player {} left active game in lobby '{}'; aborting game and cleaning up runtime resources",
+                    playerId, lobbyName);
+            broadcastToGame(game, Message.error("Spiel beendet: Ein Spieler hat die Lobby verlassen."));
+            cleanupGame(game);
+        }
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        log.info("Shutting down game service ({} active games, {} active timers)", games.size(), timers.size());
+
+        for (GameState game : new ArrayList<>(games.values())) {
+            synchronized (game) {
+                cleanupGame(game);
+            }
+        }
+
+        scheduler.shutdownNow();
+        try {
+            if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                log.warn("Game scheduler did not terminate cleanly within timeout");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("Interrupted while waiting for game scheduler shutdown", e);
+        }
+    }
+
+    private boolean isGameActive(GameState game) {
+        return game != null && game.isActive() && games.get(game.getLobbyId()) == game;
     }
 
     // ══════════════════════════════════════════════════════
