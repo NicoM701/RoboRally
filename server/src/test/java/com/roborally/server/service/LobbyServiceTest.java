@@ -1,5 +1,6 @@
 package com.roborally.server.service;
 
+import com.roborally.server.model.GameState;
 import com.roborally.server.model.Lobby;
 import com.roborally.server.model.User;
 import com.roborally.server.repository.UserRepository;
@@ -27,6 +28,8 @@ class LobbyServiceTest {
     private SessionManager sessionManager;
     @Autowired
     private UserRepository userRepository;
+    @Autowired
+    private GameService gameService;
 
     private Long hostId;
     private Long player2Id;
@@ -213,6 +216,24 @@ class LobbyServiceTest {
         assertEquals(newLobby.getId(), lobbyService.getLobbyIdByUserId(hostId));
     }
 
+    @Test
+    @DisplayName("Leave: during active game → player removed before lobby returns to waiting")
+    void leaveLobby_activeGame_abortsAndRemovesPlayer() {
+        Lobby lobby = lobbyService.createLobby(hostId, "Test", null, 4);
+        lobbyService.joinLobby(player2Id, lobby.getId(), null);
+        GameState game = gameService.startGame(hostId);
+
+        lobbyService.leaveLobby(player2Id);
+
+        assertNull(gameService.getGame(lobby.getId()));
+        assertFalse(game.isActive());
+        assertEquals(Lobby.LobbyStatus.WAITING, lobby.getStatus());
+        assertTrue(game.getPlayerHands().isEmpty());
+        assertTrue(game.getDeck().isEmpty());
+        assertFalse(lobby.containsPlayer(player2Id));
+        assertEquals(1, lobby.getPlayerCount());
+    }
+
     // ─── Kick Player ────────────────────────────────────
 
     @Test
@@ -223,6 +244,24 @@ class LobbyServiceTest {
 
         lobbyService.kickPlayer(hostId, player2Id);
 
+        assertFalse(lobby.containsPlayer(player2Id));
+        assertEquals(1, lobby.getPlayerCount());
+    }
+
+    @Test
+    @DisplayName("Kick: during active game → aborts runtime cleanup before removal")
+    void kickPlayer_activeGame_abortsAndCleansUp() {
+        Lobby lobby = lobbyService.createLobby(hostId, "Test", null, 4);
+        lobbyService.joinLobby(player2Id, lobby.getId(), null);
+        GameState game = gameService.startGame(hostId);
+
+        lobbyService.kickPlayer(hostId, player2Id);
+
+        assertNull(gameService.getGame(lobby.getId()));
+        assertFalse(game.isActive());
+        assertEquals(Lobby.LobbyStatus.WAITING, lobby.getStatus());
+        assertTrue(game.getPlayerHands().isEmpty());
+        assertTrue(game.getDeck().isEmpty());
         assertFalse(lobby.containsPlayer(player2Id));
         assertEquals(1, lobby.getPlayerCount());
     }

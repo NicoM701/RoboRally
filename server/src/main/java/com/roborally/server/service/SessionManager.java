@@ -2,9 +2,11 @@ package com.roborally.server.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.roborally.common.protocol.Message;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
@@ -88,6 +90,20 @@ public class SessionManager {
 
     public int getActiveSessionCount() {
         return sessions.size();
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        for (WebSocketSession session : sessions.values()) {
+            if (session != null && session.isOpen()) {
+                try {
+                    session.close(CloseStatus.GOING_AWAY);
+                } catch (IOException e) {
+                    log.warn("Failed to close session {} during shutdown: {}", session.getId(), e.getMessage());
+                }
+            }
+        }
+        sessions.clear();
     }
 
     /**

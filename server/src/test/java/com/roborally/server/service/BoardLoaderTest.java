@@ -219,6 +219,34 @@ class BoardLoaderTest {
     }
 
     @Test
+    @DisplayName("Map4: checkpoint tiles preserve the underlying conveyor metadata")
+    @SuppressWarnings("unchecked")
+    void map4_checkpointOverExpressBeltKeepsConveyorAndSerializesBoth() {
+        Board board = boardLoader.createDefaultBoard("map4");
+        Tile tile = board.getTile(8, 3);
+
+        assertNotNull(tile.getCheckpoint());
+        assertEquals(2, tile.getCheckpoint().getNumber());
+        assertNotNull(tile.getConveyorBelt());
+        assertTrue(tile.getConveyorBelt().isExpress());
+        assertEquals(Direction.SOUTH, tile.getConveyorBelt().getDirection());
+
+        Map<String, Object> boardMap = board.toMap();
+        List<Map<String, Object>> tiles = (List<Map<String, Object>>) boardMap.get("tiles");
+        Map<String, Object> serializedTile = tiles.stream()
+                .filter(entry -> ((Number) entry.get("x")).intValue() == 8
+                        && ((Number) entry.get("y")).intValue() == 3)
+                .findFirst()
+                .orElseThrow();
+
+        Map<String, Object> conveyor = (Map<String, Object>) serializedTile.get("conveyorBelt");
+        assertNotNull(conveyor);
+        assertEquals("SOUTH", conveyor.get("direction"));
+        assertEquals(true, conveyor.get("express"));
+        assertNotNull(serializedTile.get("checkpoint"));
+    }
+
+    @Test
     @DisplayName("Map5: legacy press round patterns are preserved")
     void map5_pressesKeepLegacyRoundPatterns() {
         Board board = boardLoader.createDefaultBoard("map5");

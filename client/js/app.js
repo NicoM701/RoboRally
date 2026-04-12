@@ -20,6 +20,7 @@ const App = (() => {
         bindChatEvents();
         bindSettingsEvents();
         bindServerMessages();
+        startGameUiLoop();
 
         RoboSocket.connect();
     }
@@ -72,8 +73,7 @@ const App = (() => {
 
     function resetLobbyAndGameState() {
         currentLobby = null;
-        gameState = null;
-        clearRoundState();
+        resetGamePresentation();
 
         const winner = document.getElementById('end-winner');
         if (winner) {
@@ -458,7 +458,10 @@ const App = (() => {
             acceptLobbyScopedMessage(nextLobby?.id);
             currentLobby = nextLobby;
             renderLobbyRoom(currentLobby);
-            if (currentScreen === 'menu') {
+            if (currentScreen === 'game') {
+                resetGamePresentation();
+                showScreen('lobby');
+            } else if (currentScreen === 'menu') {
                 showScreen('lobby');
             }
         });
@@ -505,14 +508,11 @@ const App = (() => {
                 return;
             }
             acceptLobbyScopedMessage(data?.lobbyId);
-            if (!gameState) {
-                gameState = data;
-            } else {
-                Object.assign(gameState, data);
+            if (!shouldAcceptGameState(data)) {
+                return;
             }
-            showScreen('game');
-            renderBoard();
-            renderGameInfo();
+
+            applyIncomingGameState(data);
         });
 
         RoboSocket.on('CARDS_DEALT', (data) => {
@@ -520,11 +520,11 @@ const App = (() => {
                 return;
             }
             acceptLobbyScopedMessage(data?.lobbyId);
-            dealtCards = data.cards || [];
-            selectedCards = [];
-            blockedSlots = data.blockedSlots || 0;
-            renderCardHand();
-            toast(`Runde ${data.round}: ${dealtCards.length} Karten erhalten!`, 'info');
+            if (!shouldAcceptCurrentGameMessage(data)) {
+                return;
+            }
+
+            applyDealtCards(data);
         });
 
         RoboSocket.on('PROGRAMMING_PHASE_START', (data) => {
@@ -532,9 +532,22 @@ const App = (() => {
                 return;
             }
             acceptLobbyScopedMessage(data?.lobbyId);
-            if (data.status === 'submitted') {
-                toast(data.message || 'Programm eingereicht!', 'success');
+            if (!shouldAcceptCurrentGameMessage(data)) {
+                return;
             }
+
+            if (data.status === 'submitted') {
+                confirmProgramSubmission();
+                toast(data.message || 'Programm eingereicht!', 'success');
+                return;
+            }
+
+            applyProgrammingUpdate(data);
+            if (data.submittedUsername && data.submittedPlayerId !== currentUser?.userId) {
+                pushGameEvent(`${data.submittedUsername} hat sein Programm eingerastet.`, 'programming');
+            }
+            renderCardHand();
+            renderGameInfo();
         });
 
         RoboSocket.on('EXECUTION_STEP', (data) => {
@@ -542,14 +555,7 @@ const App = (() => {
                 return;
             }
             acceptLobbyScopedMessage(data?.lobbyId);
-            if (!gameState) {
-                return;
-            }
-            if (data.robots) {
-                gameState.robots = data.robots;
-                renderBoard();
-            }
-            toast(`Schritt ${data.step} ausgeführt`, 'info');
+            queueExecutionStep(data);
         });
 
         RoboSocket.on('GAME_OVER', (data) => {
@@ -557,9 +563,16 @@ const App = (() => {
                 return;
             }
             acceptLobbyScopedMessage(data?.lobbyId);
-            clearRoundState();
-            showScreen('end');
-            renderEndScreen(data);
+            if (!shouldAcceptGameOver(data)) {
+                return;
+            }
+
+            if (executionPlayback.isPlaying || executionPlayback.queue.length > 0) {
+                executionPlayback.pendingGameOver = data;
+                return;
+            }
+
+            showGameOver(data);
         });
 
         // Errors
@@ -568,6 +581,7 @@ const App = (() => {
             if (!getActiveLobbyId()) {
                 joiningLobbyId = null;
             }
+            rollbackPendingProgramSubmission();
             if (currentScreen === 'login') {
                 showAuthMessage(msg);
             } else {
@@ -598,14 +612,36 @@ const App = (() => {
     let dealtCards = [];
     let selectedCards = [];
     let blockedSlots = 0;
+    let submittedProgramPreview = [];
+    let gameEventLog = [];
+    let programmingState = createProgrammingState();
+    let executionPlayback = createExecutionPlaybackState();
+    let gameUiLoop = null;
 
     const TILE_SIZE = 48;
-    const ROBOT_COLORS = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c', '#e67e22', '#34495e'];
+    const ROBOT_COLORS = ['#3498db', '#2ecc71', '#95a5a6', '#e67e22', '#ff66cc', '#9b59b6', '#e74c3c', '#f1c40f'];
+    const ROBOT_LABELS = ['Blau', 'Grün', 'Grau', 'Orange', 'Pink', 'Lila', 'Rot', 'Gelb'];
     const TILE_COLORS = {
         FLOOR: '#3d4f5f',
         PIT: '#0d0d0d',
         START: '#4a6741',
         WALL: '#c0c0c0'
+    };
+    const PHASE_LABELS = {
+        WAITING: 'Bereitmachen',
+        DEALING_CARDS: 'Karten werden verteilt',
+        PROGRAMMING: 'Programmieren',
+        EXECUTING: 'Ausführung',
+        ROUND_CLEANUP: 'Aufräumen',
+        GAME_OVER: 'Spiel vorbei'
+    };
+    const PHASE_COPY = {
+        WAITING: 'Noch einen Moment. Die Fabrik wird vorbereitet.',
+        DEALING_CARDS: 'Neue Hand kommt rein. Gleich geht’s wieder los.',
+        PROGRAMMING: 'Wähle jetzt 5 Register in der Reihenfolge aus, in der dein Roboter sie fahren soll.',
+        EXECUTING: 'Die Register werden nacheinander abgespielt. Jetzt lieber schauen als hektisch klicken.',
+        ROUND_CLEANUP: 'Die Runde wird gerade abgeschlossen.',
+        GAME_OVER: 'Die Fabrik hat gesprochen.'
     };
 
     const ASSETS = {};
@@ -863,6 +899,632 @@ const App = (() => {
         MOVE_1: '↑1', MOVE_2: '↑2', MOVE_3: '↑3',
         BACKUP: '↓', TURN_LEFT: '↶', TURN_RIGHT: '↷', U_TURN: '↩'
     };
+    const CARD_LABELS = {
+        MOVE_1: 'Vor 1',
+        MOVE_2: 'Vor 2',
+        MOVE_3: 'Vor 3',
+        BACKUP: 'Rückwärts',
+        TURN_LEFT: 'Links drehen',
+        TURN_RIGHT: 'Rechts drehen',
+        U_TURN: 'Wenden'
+    };
+
+    function createProgrammingState() {
+        return {
+            enabled: false,
+            totalSeconds: 60,
+            deadlineEpochMs: null,
+            submittedCount: 0,
+            totalPlayers: 0,
+            isSubmitted: false,
+            submitPending: false,
+            pendingCardIds: []
+        };
+    }
+
+    function createExecutionPlaybackState() {
+        return {
+            queue: [],
+            isPlaying: false,
+            round: null,
+            currentStep: 0,
+            currentSummary: '',
+            pendingGameOver: null,
+            timerId: null
+        };
+    }
+
+    function resetMatchPresentationState() {
+        dealtCards = [];
+        selectedCards = [];
+        blockedSlots = 0;
+        submittedProgramPreview = [];
+        gameEventLog = [];
+        programmingState = createProgrammingState();
+        executionPlayback = createExecutionPlaybackState();
+    }
+
+    function clearExecutionPlaybackTimer() {
+        if (executionPlayback?.timerId) {
+            window.clearTimeout(executionPlayback.timerId);
+            executionPlayback.timerId = null;
+        }
+    }
+
+    function startGameUiLoop() {
+        if (gameUiLoop) return;
+        gameUiLoop = window.setInterval(() => {
+            if (currentScreen !== 'game' || !gameState) return;
+            if (getDisplayedPhase() === 'PROGRAMMING' || executionPlayback.isPlaying) {
+                renderGameInfo();
+            }
+        }, 250);
+    }
+
+    function resetGamePresentation() {
+        clearExecutionPlaybackTimer();
+        gameState = null;
+        resetMatchPresentationState();
+    }
+
+    function applyIncomingGameState(data) {
+        const isNewGameInstance = !gameState?.gameInstanceId || data?.gameInstanceId !== gameState.gameInstanceId;
+
+        if (isNewGameInstance) {
+            clearExecutionPlaybackTimer();
+            resetMatchPresentationState();
+            gameState = { ...data };
+        } else {
+            Object.assign(gameState, data);
+        }
+
+        if (!programmingState.totalPlayers && gameState.robots) {
+            programmingState.totalPlayers = gameState.robots.filter(robot => !robot.destroyed).length;
+        }
+
+        if (data.phase === 'PROGRAMMING') {
+            applyProgrammingUpdate({ phase: 'PROGRAMMING' });
+        }
+
+        showScreen('game');
+        renderBoard();
+        renderGameInfo();
+    }
+
+    function hasLobbyGameContext() {
+        return Boolean(currentUser && currentLobby && ['lobby', 'game', 'end'].includes(currentScreen));
+    }
+
+    function hasActiveGamePresentation() {
+        return Boolean(currentUser && currentLobby && gameState && currentScreen === 'game');
+    }
+
+    function hasCompleteGameMessageContext(data) {
+        return Boolean(currentLobby?.id && data?.lobbyId && data?.gameInstanceId);
+    }
+
+    function hasMatchingGameStateLobby(data) {
+        if (!hasCompleteGameMessageContext(data)) {
+            return false;
+        }
+
+        return data.lobbyId === currentLobby.id;
+    }
+
+    function hasMatchingCurrentGameInstance(data) {
+        return Boolean(
+            hasMatchingGameStateLobby(data)
+            && gameState?.gameInstanceId
+            && data.gameInstanceId === gameState.gameInstanceId
+        );
+    }
+
+    function shouldAcceptCurrentGameMessage(data) {
+        return hasActiveGamePresentation() && hasMatchingCurrentGameInstance(data);
+    }
+
+    function isFullGameStateSnapshot(data) {
+        return Boolean(data?.board && Array.isArray(data?.robots));
+    }
+
+    function shouldAcceptGameState(data) {
+        if (!hasLobbyGameContext() || !hasMatchingGameStateLobby(data)) {
+            return false;
+        }
+
+        if (!gameState) {
+            return isFullGameStateSnapshot(data);
+        }
+
+        if (currentScreen === 'end' || gameState?.phase === 'GAME_OVER') {
+            return data.gameInstanceId !== gameState.gameInstanceId && isFullGameStateSnapshot(data);
+        }
+
+        if (!hasMatchingCurrentGameInstance(data)) {
+            return false;
+        }
+
+        return hasMatchingExecutionRobots(data?.robots);
+    }
+
+    function hasMatchingExecutionRobots(robots) {
+        if (!Array.isArray(robots) || !robots.length || !Array.isArray(gameState?.robots) || !gameState.robots.length) {
+            return true;
+        }
+
+        const currentPlayerIds = [...new Set(gameState.robots.map(robot => robot.playerId))].sort((a, b) => a - b);
+        const incomingPlayerIds = [...new Set(robots.map(robot => robot.playerId))].sort((a, b) => a - b);
+
+        if (currentPlayerIds.length !== incomingPlayerIds.length) {
+            return false;
+        }
+
+        return currentPlayerIds.every((playerId, index) => playerId === incomingPlayerIds[index]);
+    }
+
+    function shouldAcceptExecutionStep(data) {
+        if (!shouldAcceptCurrentGameMessage(data)) {
+            return false;
+        }
+
+        if (!hasMatchingExecutionRobots(data?.robots)) {
+            return false;
+        }
+
+        if (executionPlayback.isPlaying || executionPlayback.queue.length > 0) {
+            return true;
+        }
+
+        if (gameState?.phase !== 'EXECUTING') {
+            return false;
+        }
+
+        if (data?.round && gameState?.round && data.round !== gameState.round) {
+            return false;
+        }
+
+        return true;
+    }
+
+    function shouldAcceptGameOver(data) {
+        if (!hasMatchingCurrentGameInstance(data)) {
+            return false;
+        }
+
+        if (executionPlayback.isPlaying || executionPlayback.queue.length > 0) {
+            return true;
+        }
+
+        if (!hasActiveGamePresentation()) {
+            return false;
+        }
+
+        return ['EXECUTING', 'ROUND_CLEANUP', 'GAME_OVER'].includes(gameState?.phase);
+    }
+
+    function getPlayerName(playerId) {
+        const player = currentLobby?.players?.find(entry => entry.userId === playerId);
+        return player?.username || `Spieler ${playerId}`;
+    }
+
+    function getRobotLabel(robot) {
+        return `${ROBOT_LABELS[robot.robotIndex % ROBOT_LABELS.length]}-Roboter`;
+    }
+
+    function getRobotAccent(robot) {
+        return ROBOT_COLORS[robot.robotIndex % ROBOT_COLORS.length];
+    }
+
+    function getLocalRobot() {
+        if (!currentUser || !gameState?.robots) return null;
+        return gameState.robots.find(robot => robot.playerId === currentUser.userId) || null;
+    }
+
+    function pushGameEvent(text, tone = 'info') {
+        if (!text) return;
+        gameEventLog.unshift({ text, tone, id: `${Date.now()}-${Math.random()}` });
+        gameEventLog = gameEventLog.slice(0, 8);
+    }
+
+    function getDisplayedPhase() {
+        if (executionPlayback.isPlaying || executionPlayback.queue.length > 0) {
+            return 'EXECUTING';
+        }
+        return gameState?.phase || 'WAITING';
+    }
+
+    function getDisplayedRound() {
+        if (executionPlayback.isPlaying && executionPlayback.round) {
+            return executionPlayback.round;
+        }
+        return gameState?.round || 1;
+    }
+
+    function getPhaseLabel(phase) {
+        return PHASE_LABELS[phase] || phase || 'Unbekannt';
+    }
+
+    function getPhaseCopy(phase) {
+        if (phase === 'PROGRAMMING' && programmingState.isSubmitted) {
+            return 'Dein Programm sitzt. Jetzt können die anderen fertig planen oder der Timer läuft aus.';
+        }
+        if (phase === 'EXECUTING' && gameState?.phase === 'PROGRAMMING') {
+            return 'Der Replay der letzten Register läuft noch. Deine nächste Hand ist schon da – du kannst parallel weiterprogrammieren.';
+        }
+        if (phase === 'EXECUTING' && executionPlayback.currentSummary) {
+            return executionPlayback.currentSummary;
+        }
+        return PHASE_COPY[phase] || 'Die Fabrik läuft.';
+    }
+
+    function getProgrammingRemainingMs() {
+        if (!programmingState.enabled || !programmingState.deadlineEpochMs) return 0;
+        return Math.max(0, programmingState.deadlineEpochMs - Date.now());
+    }
+
+    function getProgrammingProgressPercent() {
+        if (!programmingState.enabled || !programmingState.totalSeconds) return 100;
+        const remainingRatio = getProgrammingRemainingMs() / (programmingState.totalSeconds * 1000);
+        return Math.max(0, Math.min(100, remainingRatio * 100));
+    }
+
+    function formatCountdown(ms) {
+        const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+        return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+
+    function getRequiredCardCount() {
+        return Math.max(0, 5 - blockedSlots);
+    }
+
+    function getLocalProgramStatus() {
+        const requiredCards = getRequiredCardCount();
+
+        if (programmingState.isSubmitted) {
+            return {
+                label: 'Programm bestätigt',
+                detail: 'Dein Programm ist sicher auf dem Server. Jetzt fehlt nur noch der Rest.',
+                tone: 'success'
+            };
+        }
+
+        if (programmingState.submitPending) {
+            return {
+                label: 'Bestätigung läuft',
+                detail: 'Dein Programm wurde abgeschickt und wartet gerade auf Server-Bestätigung.',
+                tone: 'warning'
+            };
+        }
+
+        if (dealtCards.length) {
+            if (selectedCards.length === requiredCards) {
+                return {
+                    label: 'Bereit zum Einreichen',
+                    detail: 'Alles gewählt – ein Klick fehlt noch.',
+                    tone: 'info'
+                };
+            }
+
+            return {
+                label: `${selectedCards.length}/${requiredCards} Karten gewählt`,
+                detail: `Wähle noch ${Math.max(0, requiredCards - selectedCards.length)} Karte(n), dann kannst du einreichen.`,
+                tone: 'info'
+            };
+        }
+
+        if (gameState?.phase === 'PROGRAMMING') {
+            return {
+                label: 'Warte auf deine Hand',
+                detail: 'Sobald die Karten da sind, kannst du direkt loslegen.',
+                tone: 'muted'
+            };
+        }
+
+        return {
+            label: 'Zwischen den Phasen',
+            detail: 'Gleich geht die nächste Hand auf.',
+            tone: 'muted'
+        };
+    }
+
+    function getNextStepHint(phase, showProgrammingStatus) {
+        if (showProgrammingStatus) {
+            if (programmingState.isSubmitted) {
+                return 'Sobald alle eingeloggt sind oder der Timer endet, startet die Register-Ausführung.';
+            }
+            if (programmingState.submitPending) {
+                return 'Nach der Bestätigung ist dein Platz fix und du wartest nur noch auf den Rest.';
+            }
+            if (executionPlayback.isPlaying) {
+                return 'Der Replay der letzten Register läuft noch, aber deine neue Planung ist schon offen.';
+            }
+            return 'Programmiere jetzt deinen Zug – danach feuert die Fabrik Register 1 bis 5 nacheinander ab.';
+        }
+
+        if (phase === 'EXECUTING') {
+            if (executionPlayback.currentStep >= 5) {
+                return 'Nach dem letzten Register startet direkt die nächste Programmierphase.';
+            }
+            return `Als Nächstes kommt Register ${Math.min(5, executionPlayback.currentStep + 1)}/5.`;
+        }
+
+        return 'Sobald die Runde vorbereitet ist, öffnet sich die nächste Programmierphase.';
+    }
+
+    function getPhaseModeLabel(phase, showProgrammingStatus) {
+        if (executionPlayback.isPlaying && showProgrammingStatus) {
+            return 'Replay + Programmierung';
+        }
+        if (phase === 'EXECUTING') {
+            return 'Replay aktiv';
+        }
+        if (showProgrammingStatus) {
+            return 'Planung live';
+        }
+        return 'Status';
+    }
+
+    function renderRegisterTrack() {
+        const currentStep = executionPlayback.isPlaying ? executionPlayback.currentStep : 0;
+
+        return `<div class="register-track-panel">
+            <div class="timer-row">
+                <span>Rundenfluss</span>
+                <strong>${executionPlayback.isPlaying ? `Register ${currentStep}/5` : gameState?.phase === 'PROGRAMMING' ? 'Programmierung offen' : 'Bereit'}</strong>
+            </div>
+            <div class="register-steps">
+                ${Array.from({ length: 5 }, (_, index) => {
+                    const step = index + 1;
+                    let state = 'upcoming';
+                    if (executionPlayback.isPlaying) {
+                        state = step < currentStep ? 'done' : step === currentStep ? 'current' : 'upcoming';
+                    } else if (gameState?.phase === 'PROGRAMMING') {
+                        state = 'planning';
+                    }
+
+                    return `<div class="register-step ${state}">
+                        <span class="register-step-index">${step}</span>
+                        <small>Register</small>
+                    </div>`;
+                }).join('')}
+            </div>
+        </div>`;
+    }
+
+    function renderCardStatusStrip() {
+        const requiredCards = getRequiredCardCount();
+        const localProgramStatus = getLocalProgramStatus();
+
+        const chips = [
+            `${selectedCards.length}/${requiredCards} gewählt`,
+            `Benötigt ${requiredCards}`
+        ];
+
+        if (blockedSlots > 0) {
+            chips.push(`${blockedSlots} blockiert`);
+        }
+
+        if (programmingState.totalPlayers) {
+            chips.push(`${programmingState.submittedCount}/${programmingState.totalPlayers} eingereicht`);
+        }
+
+        chips.push(localProgramStatus.label);
+
+        return `<div class="card-status-strip">${chips.map(label => `<span class="card-status-chip">${escapeHtml(label)}</span>`).join('')}</div>`;
+    }
+
+    function applyProgrammingUpdate(data = {}) {
+        if ('timerEnabled' in data) {
+            programmingState.enabled = Boolean(data.timerEnabled);
+            if (!programmingState.enabled) {
+                programmingState.deadlineEpochMs = null;
+            }
+        }
+
+        const timerSeconds = Number(data.timerSeconds);
+        if (Number.isFinite(timerSeconds) && timerSeconds > 0) {
+            programmingState.totalSeconds = timerSeconds;
+        }
+
+        const deadlineEpochMs = Number(data.deadlineEpochMs);
+        if (Number.isFinite(deadlineEpochMs) && deadlineEpochMs > 0) {
+            programmingState.deadlineEpochMs = deadlineEpochMs;
+        }
+
+        const submittedCount = Number(data.submittedCount);
+        if (Number.isFinite(submittedCount)) {
+            programmingState.submittedCount = submittedCount;
+        }
+
+        const totalPlayers = Number(data.totalPlayers);
+        if (Number.isFinite(totalPlayers) && totalPlayers >= 0) {
+            programmingState.totalPlayers = totalPlayers;
+        } else if (!programmingState.totalPlayers && gameState?.robots) {
+            programmingState.totalPlayers = gameState.robots.filter(robot => !robot.destroyed).length;
+        }
+
+        if ((data.phase === 'PROGRAMMING' || data.status === 'started') && !('submittedPlayerId' in data)) {
+            programmingState.isSubmitted = false;
+            programmingState.submitPending = false;
+            programmingState.pendingCardIds = [];
+        }
+        if (data.status === 'submitted') {
+            programmingState.isSubmitted = true;
+        }
+    }
+
+    function applyDealtCards(data, { silent = false } = {}) {
+        dealtCards = data.cards || [];
+        selectedCards = [];
+        blockedSlots = data.blockedSlots || 0;
+        submittedProgramPreview = [];
+        applyProgrammingUpdate({ ...data, phase: 'PROGRAMMING', status: 'started' });
+        renderCardHand();
+        renderGameInfo();
+        if (!silent) {
+            pushGameEvent(`Runde ${data.round}: ${dealtCards.length} Karten eingetroffen. Jetzt programmieren.`, 'programming');
+            toast(`Runde ${data.round}: ${dealtCards.length} Karten erhalten!`, 'info');
+        }
+    }
+
+    function getSelectedProgramPreview(cardIds = selectedCards) {
+        return cardIds
+            .map(cardId => dealtCards.find(card => card.id === cardId))
+            .filter(Boolean);
+    }
+
+    function confirmProgramSubmission() {
+        submittedProgramPreview = getSelectedProgramPreview(
+            programmingState.pendingCardIds.length ? programmingState.pendingCardIds : selectedCards
+        );
+        programmingState.submitPending = false;
+        programmingState.pendingCardIds = [];
+        programmingState.isSubmitted = true;
+        dealtCards = [];
+        selectedCards = [];
+        pushGameEvent('Programm eingeloggt. Jetzt darf der Rest nachziehen.', 'programming');
+        renderCardHand();
+        renderGameInfo();
+    }
+
+    function rollbackPendingProgramSubmission() {
+        if (!programmingState.submitPending) return;
+        programmingState.submitPending = false;
+        programmingState.pendingCardIds = [];
+        renderCardHand();
+        renderGameInfo();
+    }
+
+    function summarizeExecutionStep(stepData) {
+        const results = stepData.results || [];
+        if (!results.length) {
+            return 'Keine sichtbaren Bewegungen in diesem Register.';
+        }
+
+        const counts = results.reduce((acc, result) => {
+            const key = result.cardType || 'UNKNOWN';
+            acc[key] = (acc[key] || 0) + 1;
+            return acc;
+        }, {});
+
+        const localAction = currentUser
+            ? results.find(result => result.playerId === currentUser.userId && CARD_LABELS[result.cardType])
+            : null;
+
+        const parts = [];
+        if (localAction) {
+            parts.push(`Du: ${CARD_LABELS[localAction.cardType]}`);
+        }
+
+        const boardEffects = [
+            ['BELT', 'Förderband'],
+            ['PUSHER', 'Schieber'],
+            ['GEAR', 'Zahnrad'],
+            ['BOARD_LASER', 'Board-Laser'],
+            ['ROBOT_LASER', 'Roboter-Laser']
+        ];
+
+        for (const [key, label] of boardEffects) {
+            if (counts[key]) {
+                parts.push(`${counts[key]}× ${label}`);
+            }
+        }
+
+        const moveCards = Object.keys(CARD_LABELS)
+            .filter(key => counts[key])
+            .slice(0, localAction ? 2 : 3)
+            .map(key => `${counts[key]}× ${CARD_LABELS[key]}`);
+        if (moveCards.length && !localAction) {
+            parts.push(moveCards.join(', '));
+        }
+
+        return parts.join(' • ') || `${results.length} Aktionen`;
+    }
+
+    function getExecutionStepDelay(stepData) {
+        const resultCount = stepData.results?.length || 0;
+        return resultCount > 8 ? 1500 : 1150;
+    }
+
+    function queueExecutionStep(data) {
+        if (!shouldAcceptExecutionStep(data)) {
+            return;
+        }
+
+        executionPlayback.queue.push({
+            ...data,
+            round: data.round || executionPlayback.round || gameState?.round || 1,
+            summary: summarizeExecutionStep(data)
+        });
+
+        if (!executionPlayback.isPlaying) {
+            executionPlayback.isPlaying = true;
+            executionPlayback.round = data.round || gameState?.round || 1;
+            executionPlayback.currentStep = 0;
+            executionPlayback.currentSummary = 'Die Fabrik löst deine Register der Reihe nach auf.';
+            dealtCards = [];
+            selectedCards = [];
+            renderCardHand();
+            pushGameEvent(`Ausführung gestartet. Die Register werden jetzt gut lesbar abgespielt.`, 'exec');
+            processExecutionQueue();
+        }
+    }
+
+    function processExecutionQueue() {
+        if (!executionPlayback.queue.length) {
+            finishExecutionPlayback();
+            return;
+        }
+
+        const nextStep = executionPlayback.queue.shift();
+        executionPlayback.isPlaying = true;
+        executionPlayback.round = nextStep.round || executionPlayback.round || 1;
+        executionPlayback.currentStep = nextStep.step || 0;
+        executionPlayback.currentSummary = nextStep.summary;
+
+        if (gameState && nextStep.robots) {
+            gameState.robots = nextStep.robots;
+            gameState.currentStep = nextStep.step || gameState.currentStep;
+        }
+
+        renderBoard();
+        renderGameInfo();
+        pushGameEvent(`Register ${nextStep.step}: ${nextStep.summary}`, 'exec');
+
+        clearExecutionPlaybackTimer();
+        executionPlayback.timerId = window.setTimeout(processExecutionQueue, getExecutionStepDelay(nextStep));
+    }
+
+    function finishExecutionPlayback() {
+        clearExecutionPlaybackTimer();
+        executionPlayback.isPlaying = false;
+        executionPlayback.currentStep = 0;
+        executionPlayback.currentSummary = '';
+        executionPlayback.round = null;
+
+        const pendingGameOver = executionPlayback.pendingGameOver;
+
+        executionPlayback.pendingGameOver = null;
+
+        renderGameInfo();
+
+        if (pendingGameOver) {
+            showGameOver(pendingGameOver);
+        }
+    }
+
+    function showGameOver(data) {
+        showScreen('end');
+        renderEndScreen(data);
+    }
+
+    function configureCanvasForBoardRendering(ctx) {
+        if (!ctx) return;
+        // Keep scaled pixel-art overlays crisp in the small lobby preview.
+        ctx.imageSmoothingEnabled = false;
+    }
 
     function renderBoard() {
         const canvas = document.getElementById('game-board-canvas');
@@ -875,6 +1537,7 @@ const App = (() => {
 
         canvas.width = w * TILE_SIZE;
         canvas.height = h * TILE_SIZE;
+        configureCanvasForBoardRendering(ctx);
 
         const defaultFloor = getAsset('/assets/fields/DEFAULT_TOP.png');
         for (let y = 0; y < h; y++) {
@@ -905,19 +1568,44 @@ const App = (() => {
 
         const robots = gameState.robots || [];
         drawBoardLasers(ctx, board, tiles, robots, TILE_SIZE);
+        const localPlayerId = currentUser?.userId;
 
         for (const robot of robots) {
             if (robot.destroyed) continue;
             const rx = robot.x * TILE_SIZE;
             const ry = robot.y * TILE_SIZE;
+            const isLocalRobot = localPlayerId === robot.playerId;
+
+            if (isLocalRobot) {
+                ctx.save();
+                ctx.fillStyle = 'rgba(6, 214, 160, 0.18)';
+                ctx.strokeStyle = '#06d6a0';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.arc(rx + TILE_SIZE / 2, ry + TILE_SIZE / 2, TILE_SIZE * 0.4, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+                ctx.restore();
+            }
+
             const img = getAsset(getRobotImagePath(robot));
             if (img) {
                 ctx.drawImage(img, rx, ry, TILE_SIZE, TILE_SIZE);
             } else {
-                ctx.fillStyle = ROBOT_COLORS[robot.robotIndex % ROBOT_COLORS.length];
+                ctx.fillStyle = getRobotAccent(robot);
                 ctx.beginPath();
                 ctx.arc(rx + TILE_SIZE/2, ry + TILE_SIZE/2, TILE_SIZE/3, 0, Math.PI * 2);
                 ctx.fill();
+            }
+
+            if (isLocalRobot) {
+                ctx.save();
+                ctx.fillStyle = '#06d6a0';
+                ctx.fillRect(rx + 4, ry + 4, 22, 14);
+                ctx.fillStyle = '#0a0e17';
+                ctx.font = '700 10px Inter, sans-serif';
+                ctx.fillText('DU', rx + 8, ry + 14);
+                ctx.restore();
             }
         }
     }
@@ -926,17 +1614,113 @@ const App = (() => {
         const panel = document.getElementById('game-info-panel');
         if (!panel || !gameState) return;
 
-        const robots = gameState.robots || [];
-        let html = `<div class="game-phase-indicator"><strong>Phase:</strong> ${gameState.phase || '—'} | <strong>Runde:</strong> ${gameState.round || 1}</div>`;
-        html += '<div class="robot-status-list">';
+        const robots = [...(gameState.robots || [])].sort((a, b) => {
+            const aLocal = a.playerId === currentUser?.userId ? 1 : 0;
+            const bLocal = b.playerId === currentUser?.userId ? 1 : 0;
+            if (aLocal !== bLocal) return bLocal - aLocal;
+            if (a.destroyed !== b.destroyed) return a.destroyed ? 1 : -1;
+            return a.playerId - b.playerId;
+        });
+        const localRobot = getLocalRobot();
+        const phase = getDisplayedPhase();
+        const programmingActive = gameState.phase === 'PROGRAMMING';
+        const showProgrammingStatus = phase === 'PROGRAMMING' || programmingActive;
+        const round = getDisplayedRound();
+        const remainingMs = getProgrammingRemainingMs();
+        const timerPercent = getProgrammingProgressPercent();
+        const timerTone = remainingMs <= 10000 ? 'danger' : remainingMs <= 20000 ? 'warning' : '';
+        const submittedText = programmingState.totalPlayers
+            ? `${programmingState.submittedCount}/${programmingState.totalPlayers} eingereicht`
+            : 'Status folgt';
+        const localProgramStatus = getLocalProgramStatus();
+        const nextStepHint = getNextStepHint(phase, showProgrammingStatus);
+        const aliveRobots = robots.filter(robot => !robot.destroyed).length;
+
+        let html = '<div class="game-command-center">';
+        html += `<div class="phase-hero phase-${phase.toLowerCase()}">
+            <div class="phase-badge">Runde ${round}</div>
+            <div class="phase-title-row">
+                <h3>${getPhaseLabel(phase)}</h3>
+                <span class="register-pill">${escapeHtml(getPhaseModeLabel(phase, showProgrammingStatus))}</span>
+            </div>
+            <p class="phase-copy">${escapeHtml(getPhaseCopy(phase))}</p>
+            <div class="phase-focus-grid">
+                <div class="focus-card focus-now ${localProgramStatus.tone}">
+                    <span class="focus-label">JETZT</span>
+                    <strong>${escapeHtml(localProgramStatus.label)}</strong>
+                    <p>${escapeHtml(localProgramStatus.detail)}</p>
+                </div>
+                <div class="focus-card">
+                    <span class="focus-label">ALS NÄCHSTES</span>
+                    <strong>${showProgrammingStatus ? 'Ausführung startet nach der Planung' : 'Nächste Zustandsänderung'}</strong>
+                    <p>${escapeHtml(nextStepHint)}</p>
+                </div>
+            </div>
+            <div class="phase-meta">
+                <span>${showProgrammingStatus ? submittedText : `Roboter aktiv: ${robots.filter(robot => !robot.destroyed).length}`}</span>
+                <span>${localRobot ? `${escapeHtml(getPlayerName(localRobot.playerId))} steuert ${escapeHtml(getRobotLabel(localRobot))}` : 'Roboter wird gesucht'}</span>
+                <span>${aliveRobots} aktiv · ${robots.length - aliveRobots} zerstört</span>
+            </div>
+            ${showProgrammingStatus ? `
+                <div class="timer-panel ${timerTone}">
+                    <div class="timer-row">
+                        <span>Programmierung</span>
+                        <strong>${programmingState.enabled ? formatCountdown(remainingMs) : 'Kein Timer'}</strong>
+                    </div>
+                    <div class="timer-track"><div class="timer-fill ${timerTone}" style="width:${timerPercent}%"></div></div>
+                </div>
+            ` : ''}
+            ${renderRegisterTrack()}
+        </div>`;
+
+        html += `<div class="game-section pilot-card ${localRobot ? '' : 'empty'}">
+            <div class="section-kicker">DEIN ROBOTER</div>
+            ${localRobot ? `
+                <div class="pilot-header">
+                    <span class="pilot-chip" style="--pilot-accent:${getRobotAccent(localRobot)}">DU</span>
+                    <div>
+                        <strong>${escapeHtml(getPlayerName(localRobot.playerId))}</strong>
+                        <div class="pilot-subtitle">${escapeHtml(getRobotLabel(localRobot))}</div>
+                    </div>
+                </div>
+                <div class="pilot-metrics">
+                    <span>📍 ${localRobot.x + 1}/${localRobot.y + 1}</span>
+                    <span>❤️ ${localRobot.lives}</span>
+                    <span>💥 ${localRobot.damage}</span>
+                    <span>🏁 CP ${Math.max(0, localRobot.nextCheckpoint - 1)}</span>
+                </div>
+                <div class="pilot-callout ${localProgramStatus.tone}">${escapeHtml(localProgramStatus.detail)}</div>
+            ` : '<p>Dein Roboter ist noch nicht im Spiel sichtbar.</p>'}
+        </div>`;
+
+        html += '<div class="game-section"><div class="section-kicker">ROSTER</div><div class="robot-status-list">';
         for (const r of robots) {
-            const color = ROBOT_COLORS[r.robotIndex % ROBOT_COLORS.length];
-            html += `<div class="robot-status" style="border-left: 4px solid ${color}">
-                <span class="robot-name">Spieler ${r.playerId}</span>
-                <span>❤️ ${r.lives} | 💥 ${r.damage} | 🏁 CP${r.nextCheckpoint - 1}${r.destroyed ? ' | ☠️' : ''}</span>
+            const color = getRobotAccent(r);
+            const isLocalRobot = currentUser?.userId === r.playerId;
+            html += `<div class="robot-status ${isLocalRobot ? 'you' : ''}" style="--robot-accent:${color}">
+                <div class="robot-status-main">
+                    <span class="robot-swatch"></span>
+                    <div>
+                        <span class="robot-name">${escapeHtml(getPlayerName(r.playerId))}</span>
+                        <div class="robot-status-sub">${escapeHtml(getRobotLabel(r))}${isLocalRobot ? ' • DU' : ''}</div>
+                    </div>
+                </div>
+                <span class="robot-status-meta">❤️ ${r.lives} · 💥 ${r.damage} · 🏁 ${Math.max(0, r.nextCheckpoint - 1)}${r.destroyed ? ' · ☠️' : ''}</span>
             </div>`;
         }
-        html += '</div>';
+        html += '</div></div>';
+
+        html += '<div class="game-section"><div class="section-kicker">EINSATZPROTOKOLL</div><div class="event-log">';
+        if (gameEventLog.length === 0) {
+            html += '<div class="event-item empty">Noch keine Meldungen. Sobald es kracht, landet es hier.</div>';
+        } else {
+            html += gameEventLog.map(event => `
+                <div class="event-item ${event.tone}">
+                    <span class="event-pill ${event.tone}">${event.tone === 'exec' ? 'EXEC' : event.tone === 'programming' ? 'PLAN' : 'INFO'}</span>
+                    <span>${escapeHtml(event.text)}</span>
+                </div>`).join('');
+        }
+        html += '</div></div></div>';
         panel.innerHTML = html;
     }
 
@@ -944,8 +1728,46 @@ const App = (() => {
         const panel = document.getElementById('game-cards-panel');
         if (!panel) return;
 
-        const needed = 5 - blockedSlots;
+        const needed = getRequiredCardCount();
+        const localProgramStatus = getLocalProgramStatus();
+        if (!dealtCards.length) {
+            const previewCards = submittedProgramPreview.length
+                ? `<div class="program-plan">${submittedProgramPreview.map((card, index) => `
+                    <div class="program-slot-preview">
+                        <span class="slot-index">${index + 1}</span>
+                        <span>${CARD_ICONS[card.type] || '?'}</span>
+                        <small>${escapeHtml(card.displayName)}</small>
+                    </div>`).join('')}</div>`
+                : '';
+
+            panel.innerHTML = `
+                <h3>🎴 Programmierung</h3>
+                ${renderCardStatusStrip()}
+                <div class="card-hand-empty">
+                    <strong>${executionPlayback.isPlaying ? 'Ausführung läuft' : programmingState.isSubmitted ? 'Programm eingeloggt' : 'Warte auf die nächste Hand'}</strong>
+                    <p>${executionPlayback.isPlaying
+                        ? gameState?.phase === 'PROGRAMMING'
+                            ? 'Der Replay läuft noch, aber deine nächste Programmierphase ist bereits live. Sobald Karten da sind, kannst du parallel planen.'
+                            : 'Die Register werden gerade Schritt für Schritt abgespielt.'
+                        : programmingState.isSubmitted
+                            ? 'Deine Auswahl ist gesichert. Jetzt die Show genießen.'
+                            : `${localProgramStatus.detail}`}</p>
+                    ${previewCards}
+                </div>`;
+            return;
+        }
+
         let html = `<h3>🎴 Deine Karten <small>(${selectedCards.length}/${needed} gewählt)</small></h3>`;
+        html += renderCardStatusStrip();
+        if (executionPlayback.isPlaying) {
+            html += '<div class="programming-summary emphasis">🎬 Replay läuft noch – du kannst trotzdem schon die nächste Runde planen.</div>';
+        }
+        if (blockedSlots > 0) {
+            html += `<div class="programming-summary">${blockedSlots} Register sind durch Schaden blockiert und bleiben aus der Vorrunde liegen.</div>`;
+        }
+        if (programmingState.submitPending) {
+            html += '<div class="programming-summary">⏳ Programm wird bestätigt …</div>';
+        }
         html += '<div class="card-hand">';
         for (const card of dealtCards) {
             const isSelected = selectedCards.includes(card.id);
@@ -961,14 +1783,29 @@ const App = (() => {
         }
         html += '</div>';
 
+        if (selectedCards.length) {
+            const chosenCards = selectedCards
+                .map(cardId => dealtCards.find(card => card.id === cardId))
+                .filter(Boolean);
+            html += `<div class="program-plan">${chosenCards.map((card, index) => `
+                <div class="program-slot-preview">
+                    <span class="slot-index">${index + 1}</span>
+                    <span>${CARD_ICONS[card.type] || '?'}</span>
+                    <small>${escapeHtml(card.displayName)}</small>
+                </div>`).join('')}</div>`;
+        }
+
         if (selectedCards.length === needed) {
-            html += '<button class="btn btn-primary btn-submit-program" onclick="App.submitProgram()">✅ Programm einreichen</button>';
+            html += `<button class="btn btn-primary btn-submit-program" onclick="App.submitProgram()" ${programmingState.submitPending ? 'disabled' : ''}>${programmingState.submitPending ? '⏳ Wird eingereicht …' : '✅ Programm einreichen'}</button>`;
         }
 
         panel.innerHTML = html;
     }
 
     function toggleCard(cardId) {
+        if (programmingState.submitPending || programmingState.isSubmitted) {
+            return;
+        }
         const needed = 5 - blockedSlots;
         const idx = selectedCards.indexOf(cardId);
         if (idx >= 0) {
@@ -980,14 +1817,18 @@ const App = (() => {
     }
 
     function submitProgram() {
+        if (programmingState.submitPending || programmingState.isSubmitted) {
+            return;
+        }
         if (selectedCards.length !== 5 - blockedSlots) {
             toast('Wähle erst die richtige Anzahl Karten!', 'error');
             return;
         }
-        RoboSocket.send('SUBMIT_PROGRAM', { cardIds: selectedCards });
-        dealtCards = [];
-        selectedCards = [];
+        programmingState.submitPending = true;
+        programmingState.pendingCardIds = [...selectedCards];
         renderCardHand();
+        renderGameInfo();
+        RoboSocket.send('SUBMIT_PROGRAM', { cardIds: selectedCards });
     }
 
     // ═══════════════════════════════════════════════════
@@ -1032,6 +1873,7 @@ const App = (() => {
             if (p.isHost) badges += '<span class="player-badge host">HOST</span>';
             if (p.isBot) badges += '<span class="player-badge bot">BOT</span>';
             if (p.isGuest) badges += '<span class="player-badge guest">GAST</span>';
+            if (currentUser && p.userId === currentUser.userId) badges += '<span class="player-badge you">DU</span>';
 
             return `
                 <div class="player-item" data-user-id="${p.userId}">
@@ -1128,6 +1970,7 @@ const App = (() => {
 
         canvas.width = w * PREVIEW_TILE_SIZE;
         canvas.height = h * PREVIEW_TILE_SIZE;
+        configureCanvasForBoardRendering(ctx);
 
         const defaultFloor = getAsset('/assets/fields/DEFAULT_TOP.png');
         for (let y = 0; y < h; y++) {
@@ -1220,11 +2063,47 @@ const App = (() => {
         }
     });
 
-    return {
+    const api = {
         joinLobby,
         toast,
         showScreen,
         toggleCard,
         submitProgram
     };
+
+    if (typeof globalThis !== 'undefined' && globalThis.__APP_TEST_HOOKS__) {
+        api.__testHooks = {
+            resetGamePresentation,
+            queueExecutionStep,
+            shouldAcceptGameState,
+            shouldAcceptExecutionStep,
+            shouldAcceptGameOver,
+            setState(state = {}) {
+                if (Object.prototype.hasOwnProperty.call(state, 'currentUser')) {
+                    currentUser = state.currentUser;
+                }
+                if (Object.prototype.hasOwnProperty.call(state, 'currentScreen')) {
+                    currentScreen = state.currentScreen;
+                }
+                if (Object.prototype.hasOwnProperty.call(state, 'currentLobby')) {
+                    currentLobby = state.currentLobby;
+                }
+                if (Object.prototype.hasOwnProperty.call(state, 'gameState')) {
+                    gameState = state.gameState;
+                }
+                if (Object.prototype.hasOwnProperty.call(state, 'executionPlayback')) {
+                    executionPlayback = {
+                        ...createExecutionPlaybackState(),
+                        ...(state.executionPlayback || {}),
+                        queue: [...(state.executionPlayback?.queue || [])]
+                    };
+                }
+            },
+            getExecutionPlaybackState() {
+                return executionPlayback;
+            }
+        };
+    }
+
+    return api;
 })();

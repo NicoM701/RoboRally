@@ -10,6 +10,7 @@ import java.util.*;
 public class GameState {
 
     private final String lobbyId;
+    private final String gameInstanceId;
     private Board board;
     private final Map<Long, Robot> robots = new LinkedHashMap<>();
     private GamePhase phase = GamePhase.WAITING;
@@ -19,15 +20,21 @@ public class GameState {
     private final List<ProgramCard> discardPile = new ArrayList<>();
     private final Map<Long, List<ProgramCard>> playerHands = new LinkedHashMap<>();
     private final Set<Long> submittedPlayers = new HashSet<>();
+    private volatile boolean active = true;
 
     public GameState(String lobbyId) {
         this.lobbyId = lobbyId;
+        this.gameInstanceId = UUID.randomUUID().toString();
     }
 
     // ─── Getters / Setters ──────────────────────────────
 
     public String getLobbyId() {
         return lobbyId;
+    }
+
+    public String getGameInstanceId() {
+        return gameInstanceId;
     }
 
     public Board getBoard() {
@@ -133,12 +140,21 @@ public class GameState {
         submittedPlayers.clear();
     }
 
+    public boolean isActive() {
+        return active;
+    }
+
+    public void deactivate() {
+        this.active = false;
+    }
+
     /**
      * Serialize game state for client.
      */
     public Map<String, Object> toMap() {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("lobbyId", lobbyId);
+        map.put("gameInstanceId", gameInstanceId);
         map.put("phase", phase.name());
         map.put("round", round);
         map.put("currentStep", currentStep);

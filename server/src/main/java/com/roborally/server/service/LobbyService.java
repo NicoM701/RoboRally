@@ -137,9 +137,14 @@ public class LobbyService {
 
         String username = getUsernameById(userId);
         String leavingSessionId = userService.getSessionIdByUserId(userId);
-        
+
         boolean wasHost;
         synchronized (lobby) {
+            if (!lobby.containsPlayer(userId)) {
+                userLobbyMap.remove(userId);
+                return;
+            }
+
             wasHost = lobby.isHost(userId);
             lobby.removePlayer(userId);
             userLobbyMap.remove(userId);
