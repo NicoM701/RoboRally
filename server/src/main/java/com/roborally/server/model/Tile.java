@@ -60,6 +60,10 @@ public class Tile {
         walls.add(dir);
     }
 
+    public void clearWalls() {
+        walls.clear();
+    }
+
     // ─── Elements ───────────────────────────────────────
 
     public ConveyorBelt getConveyorBelt() {

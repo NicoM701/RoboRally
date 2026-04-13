@@ -94,6 +94,17 @@ class BoardLoaderTest {
     }
 
     @Test
+    @DisplayName("Map1: overwritten wall metadata does not survive translated repair tiles")
+    void map1_overwrittenRepairTileDoesNotLeakLegacyWalls() {
+        Board board = boardLoader.createDefaultBoard("map1");
+        Tile repairTile = board.getTile(3, 1);
+
+        assertTrue(repairTile.isRepair());
+        assertFalse(repairTile.hasWall(Direction.SOUTH));
+        assertFalse(board.getTile(3, 0).hasWall(Direction.NORTH));
+    }
+
+    @Test
     @DisplayName("Map1: walls are mirrored onto the adjacent tile once the board is assembled")
     void map1_mirrorsLegacyWalls() {
         Board board = boardLoader.createDefaultBoard("map1");

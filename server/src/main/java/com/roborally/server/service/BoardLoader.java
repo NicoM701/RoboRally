@@ -122,6 +122,11 @@ public class BoardLoader {
     }
 
     private void resetTile(Tile tile, FieldType fieldType) {
+        // Legacy boards frequently replaced a default/walled field with a conveyor, pit, etc.
+        // When that happened in the original renderer, any walls already attached to the old
+        // field object disappeared with it. Clear them here so later mirroring only sees walls
+        // that survive on the translated tile.
+        tile.clearWalls();
         tile.setFieldType(fieldType);
         tile.setConveyorBelt(null);
         tile.setGear(null);

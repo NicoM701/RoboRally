@@ -856,11 +856,13 @@ button {
    ═══════════════════════════════════════════════════════ */
 #screen-game {
     flex-direction: row;
+    overflow: auto;
 }
 
 .game-container {
     display: flex;
     flex: 1;
+    align-items: stretch;
     min-height: 0;
     overflow: hidden;
 }
@@ -885,11 +887,15 @@ button {
 }
 
 #game-sidebar {
-    width: 380px;
+    width: min(380px, 38vw);
+    min-width: 320px;
     display: flex;
     flex-direction: column;
     background: var(--bg-card);
     border-left: 1px solid var(--border-subtle);
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
 }
 
 #game-info-panel {
@@ -904,7 +910,8 @@ button {
 }
 
 #game-chat-panel {
-    flex: 1;
+    flex: 1 0 200px;
+    min-height: 200px;
     display: flex;
     flex-direction: column;
     width: 100%;
@@ -1596,6 +1603,35 @@ button {
         display: none;
     }
 
+    #screen-game {
+        overflow: auto;
+    }
+
+    .game-container {
+        flex-direction: column;
+        min-height: 100%;
+        overflow: visible;
+    }
+
+    #game-board-area {
+        flex: 0 0 auto;
+        min-height: clamp(240px, 42vh, 420px);
+        align-items: flex-start;
+    }
+
+    #game-sidebar {
+        width: 100%;
+        min-width: 0;
+        border-left: none;
+        border-top: 1px solid var(--border-subtle);
+        overflow: visible;
+    }
+
+    #game-info-panel,
+    #game-cards-panel {
+        padding: 14px;
+    }
+
     .phase-focus-grid {
         grid-template-columns: 1fr;
     }
@@ -1626,5 +1662,33 @@ button {
 
     .logo-text {
         font-size: 2rem;
+    }
+
+    #game-board-area {
+        padding: 12px;
+    }
+
+    .card-hand {
+        grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+    }
+
+    .program-card {
+        min-height: 74px;
+        padding: 9px 5px;
+    }
+}
+
+@media (max-height: 860px) {
+    #game-sidebar {
+        width: min(360px, 40vw);
+    }
+
+    #game-info-panel,
+    #game-cards-panel {
+        padding: 12px;
+    }
+
+    .card-hand {
+        max-height: 210px;
     }
 }
