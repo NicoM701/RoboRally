@@ -280,6 +280,53 @@ class BoardLoaderTest {
     }
 
     @Test
+    @DisplayName("Legacy maps: no stray mirrored walls survive in runtime or serialized preview data")
+    @SuppressWarnings("unchecked")
+    void legacyMaps_haveMirroredWallsInRuntimeAndPreviewPayload() {
+        for (String mapName : List.of("map1", "map2", "map3", "map4", "map5", "map6")) {
+            Board board = boardLoader.createDefaultBoard(mapName);
+            Map<String, Object> boardMap = board.toMap();
+            List<Map<String, Object>> serializedTiles = (List<Map<String, Object>>) boardMap.get("tiles");
+            Map<String, Map<String, Object>> serializedByCoord = new java.util.HashMap<>();
+            for (Map<String, Object> tile : serializedTiles) {
+                serializedByCoord.put(tile.get("x") + "," + tile.get("y"), tile);
+            }
+
+            for (int y = 0; y < board.getHeight(); y++) {
+                for (int x = 0; x < board.getWidth(); x++) {
+                    Tile tile = board.getTile(x, y);
+                    for (Direction wall : tile.getWalls()) {
+                        final int tileX = x;
+                        final int tileY = y;
+                        Tile neighbor = board.getTile(x + wall.dx(), y - wall.dy());
+                        if (neighbor == null) {
+                            continue;
+                        }
+
+                        assertTrue(neighbor.hasWall(wall.opposite()),
+                                () -> mapName + " runtime wall at (" + tileX + "," + tileY + ") missing mirrored "
+                                        + wall.opposite() + " wall on neighbor");
+
+                        Map<String, Object> serializedNeighbor = serializedByCoord
+                                .get(neighbor.getX() + "," + neighbor.getY());
+                        assertNotNull(serializedNeighbor,
+                                () -> mapName + " serialized preview omitted mirrored neighbor tile at ("
+                                        + neighbor.getX() + "," + neighbor.getY() + ")");
+
+                        List<String> serializedWalls = (List<String>) serializedNeighbor.get("walls");
+                        assertNotNull(serializedWalls,
+                                () -> mapName + " serialized preview omitted walls for mirrored neighbor tile at ("
+                                        + neighbor.getX() + "," + neighbor.getY() + ")");
+                        assertTrue(serializedWalls.contains(wall.opposite().name()),
+                                () -> mapName + " serialized preview wall at (" + tileX + "," + tileY + ") missing mirrored "
+                                        + wall.opposite() + " wall on neighbor tile");
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     @DisplayName("Default board: serializes to a board payload")
     void defaultBoard_toMap() {
         Board board = boardLoader.createDefaultBoard("Test");

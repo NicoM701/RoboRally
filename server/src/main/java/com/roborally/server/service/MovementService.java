@@ -16,6 +16,9 @@ import java.util.*;
 @Component
 public class MovementService {
 
+    private record PlannedBeltMove(Robot robot, ConveyorBelt belt, int sourceX, int sourceY, Direction travelDirection) {
+    }
+
     private static final Logger log = LoggerFactory.getLogger(MovementService.class);
 
     // ══════════════════════════════════════════════════════
@@ -290,31 +293,41 @@ public class MovementService {
 
     private void processBelts(GameState game, boolean expressOnly, List<Map<String, Object>> results) {
         Board board = game.getBoard();
-        List<Robot> robotsToMove = getMovableRobots(game);
-        
-        Map<Robot, com.roborally.server.model.ConveyorBelt> movements = new HashMap<>();
-        for (Robot r : robotsToMove) {
+        List<PlannedBeltMove> plannedMoves = new ArrayList<>();
+        for (Robot r : getMovableRobots(game)) {
             Tile tile = board.getTile(r.getX(), r.getY());
             if (tile != null && tile.getConveyorBelt() != null) {
-                com.roborally.server.model.ConveyorBelt belt = tile.getConveyorBelt();
+                ConveyorBelt belt = tile.getConveyorBelt();
                 if (!expressOnly || belt.isExpress()) {
-                    movements.put(r, belt);
+                    plannedMoves.add(new PlannedBeltMove(
+                            r,
+                            belt,
+                            r.getX(),
+                            r.getY(),
+                            resolveLegacyBeltMoveDirection(belt)));
                 }
             }
         }
+
+        plannedMoves.sort(Comparator.comparing(move -> move.robot().getPlayerId()));
 
         // Legacy boards store curve directions as the incoming/straight-through side, not
         // the literal outgoing move direction. A curve therefore needs one extra turn when the
         // robot starts its movement on that tile, and the destination tile may rotate the robot
         // again depending on how the two belts connect.
-        for (Robot r : movements.keySet()) {
+        for (PlannedBeltMove move : plannedMoves) {
+            Robot r = move.robot();
             if (r.isDestroyed()) continue;
-            com.roborally.server.model.ConveyorBelt sourceBelt = movements.get(r);
+            if (r.getX() != move.sourceX() || r.getY() != move.sourceY()) {
+                continue;
+            }
+
+            ConveyorBelt sourceBelt = move.belt();
             int prevX = r.getX();
             int prevY = r.getY();
             Direction prevDir = r.getDirection();
 
-            Direction travelDirection = resolveLegacyBeltMoveDirection(sourceBelt);
+            Direction travelDirection = move.travelDirection();
             boolean moved = moveOneStep(game, r, travelDirection);
             if (moved) {
                 Tile newTile = board.getTile(r.getX(), r.getY());

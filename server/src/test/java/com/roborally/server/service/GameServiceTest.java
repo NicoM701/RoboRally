@@ -15,6 +15,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.*;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 
@@ -187,11 +188,13 @@ class GameServiceTest {
     @Test
     void startGame_missingCheckpoints_defaultsToBoardTotal() {
         when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
-        Board board = new Board("test", 12, 12);
-        board.addStartPosition(1, 11);
-        board.addStartPosition(2, 11);
-        board.setTotalCheckpoints(2);
-        when(boardLoader.loadBoard(anyString())).thenReturn(board);
+        when(boardLoader.loadBoard(anyString())).thenAnswer(invocation -> {
+            Board freshBoard = new Board("test", 12, 12);
+            freshBoard.addStartPosition(1, 11);
+            freshBoard.addStartPosition(2, 11);
+            freshBoard.setTotalCheckpoints(2);
+            return freshBoard;
+        });
         when(cardService.createDeck()).thenReturn(createMockDeck());
         lenient().when(userService.getSessionIdByUserId(anyLong())).thenReturn(null);
         lenient().when(movementService.executeStep(any(), anyInt())).thenReturn(List.of());
@@ -672,6 +675,68 @@ class GameServiceTest {
     }
 
     @Test
+    void autoSubmitMissing_discardsUnusedCardsAndClearsHands() {
+        GameState game = startTestGame();
+        game.getPlayerHands().put(1L, createMockHand());
+        game.getPlayerHands().put(2L, createMockHand());
+        game.getDiscardPile().clear();
+        game.clearSubmissions();
+
+        invokeAutoSubmitMissing(game);
+
+        assertTrue(game.getSubmittedPlayers().containsAll(List.of(1L, 2L)));
+        assertTrue(game.getPlayerHands().isEmpty());
+        assertEquals(8, game.getDiscardPile().size());
+        assertNotNull(game.getRobot(1L).getSlot(0));
+        assertNotNull(game.getRobot(2L).getSlot(0));
+    }
+
+    @Test
+    void gameCanRestartFromSameLobbyAfterCleanupWithFreshInstance() {
+        when(lobbyService.getLobbyByUserId(anyLong())).thenReturn(lobby);
+        when(lobbyService.getLobbyById(lobby.getId())).thenReturn(lobby);
+        when(cardService.validateProgram(any(), any(), any(), anyInt())).thenReturn(null);
+        when(userService.getUserById(anyLong())).thenAnswer(invocation -> {
+            Long playerId = invocation.getArgument(0);
+            User user = new User(playerId == 1L ? "Alice" : "Bob", playerId + "@example.com", "hash", false);
+            user.setId(playerId);
+            return Optional.of(user);
+        });
+        when(boardLoader.loadBoard(anyString())).thenAnswer(invocation -> {
+            Board freshBoard = new Board("test", 12, 12);
+            freshBoard.addStartPosition(1, 11);
+            freshBoard.addStartPosition(2, 11);
+            freshBoard.setTotalCheckpoints(2);
+            return freshBoard;
+        });
+        when(cardService.createDeck()).thenReturn(createMockDeck());
+        when(cardService.deal(any(), any(), any())).thenAnswer(invocation -> createMockHand());
+        lenient().when(userService.getSessionIdByUserId(anyLong())).thenReturn(null);
+        when(movementService.executeStep(any(), anyInt())).thenReturn(List.of());
+
+        GameState firstGame = gameService.startGame(1L);
+        String firstInstanceId = firstGame.getGameInstanceId();
+        firstGame.getBoard().setTotalCheckpoints(0);
+
+        gameService.submitProgram(2L, List.of(1, 2, 3, 4, 5));
+        gameService.submitProgram(1L, List.of(1, 2, 3, 4, 5));
+
+        assertNull(gameService.getGame(lobby.getId()));
+        assertEquals(Lobby.LobbyStatus.WAITING, lobby.getStatus());
+
+        GameState secondGame = gameService.startGame(1L);
+
+        assertNotNull(secondGame);
+        assertNotSame(firstGame, secondGame);
+        assertNotEquals(firstInstanceId, secondGame.getGameInstanceId());
+        assertEquals(GamePhase.PROGRAMMING, secondGame.getPhase());
+        assertEquals(1, secondGame.getRound());
+        assertTrue(secondGame.getSubmittedPlayers().isEmpty());
+        assertEquals(2, secondGame.getPlayerHands().size());
+        assertEquals(Lobby.LobbyStatus.IN_GAME, lobby.getStatus());
+    }
+
+    @Test
     void startGame_insufficientStartPositions_throws() {
         when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
         Board board = new Board("test", 12, 12);
@@ -735,6 +800,16 @@ class GameServiceTest {
             field.setAccessible(true);
             Map<String, Long> deadlines = (Map<String, Long>) field.get(gameService);
             return deadlines.get(lobbyId);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    private void invokeAutoSubmitMissing(GameState game) {
+        try {
+            Method method = GameService.class.getDeclaredMethod("autoSubmitMissing", GameState.class);
+            method.setAccessible(true);
+            method.invoke(gameService, game);
         } catch (ReflectiveOperationException e) {
             throw new AssertionError(e);
         }

@@ -404,6 +404,24 @@ class MovementServiceTest {
     }
 
     @Test
+    void executeStep_conveyorChain_doesNotMoveDisplacedRobotTwice() {
+        Robot r1 = new Robot(1L, 0, 1, 5, Direction.NORTH);
+        Robot r2 = new Robot(2L, 1, 2, 5, Direction.NORTH);
+        game.addRobot(1L, r1);
+        game.addRobot(2L, r2);
+
+        board.getTile(1, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false));
+        board.getTile(2, 5).setConveyorBelt(new ConveyorBelt(Direction.EAST, false));
+
+        service.executeStep(game, 0);
+
+        assertEquals(2, r1.getX());
+        assertEquals(5, r1.getY());
+        assertEquals(3, r2.getX());
+        assertEquals(5, r2.getY());
+    }
+
+    @Test
     void executeStep_gear_rotatesRobot() {
         Robot r1 = new Robot(1L, 0, 5, 5, Direction.NORTH);
         game.addRobot(1L, r1);

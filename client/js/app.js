@@ -10,6 +10,15 @@ const App = (() => {
     let joiningLobbyId = null;
     let exitingLobbyId = null;
     let availableBoards = [];
+    const setTimeoutFn = typeof globalThis.setTimeout === 'function'
+        ? globalThis.setTimeout.bind(globalThis)
+        : (() => 0);
+    const clearTimeoutFn = typeof globalThis.clearTimeout === 'function'
+        ? globalThis.clearTimeout.bind(globalThis)
+        : (() => {});
+    const setIntervalFn = typeof globalThis.setInterval === 'function'
+        ? globalThis.setInterval.bind(globalThis)
+        : (() => 0);
 
     // ─── Initialization ─────────────────────────────────
 
@@ -946,14 +955,14 @@ const App = (() => {
 
     function clearExecutionPlaybackTimer() {
         if (executionPlayback?.timerId) {
-            window.clearTimeout(executionPlayback.timerId);
+            clearTimeoutFn(executionPlayback.timerId);
             executionPlayback.timerId = null;
         }
     }
 
     function startGameUiLoop() {
         if (gameUiLoop) return;
-        gameUiLoop = window.setInterval(() => {
+        gameUiLoop = setIntervalFn(() => {
             if (currentScreen !== 'game' || !gameState) return;
             if (getDisplayedPhase() === 'PROGRAMMING' || executionPlayback.isPlaying) {
                 renderGameInfo();
@@ -1494,7 +1503,7 @@ const App = (() => {
         pushGameEvent(`Register ${nextStep.step}: ${nextStep.summary}`, 'exec');
 
         clearExecutionPlaybackTimer();
-        executionPlayback.timerId = window.setTimeout(processExecutionQueue, getExecutionStepDelay(nextStep));
+        executionPlayback.timerId = setTimeoutFn(processExecutionQueue, getExecutionStepDelay(nextStep));
     }
 
     function finishExecutionPlayback() {

@@ -568,11 +568,21 @@ public class GameService {
                 if (hand == null || hand.isEmpty())
                     continue;
 
-                Collections.shuffle(hand);
+                List<ProgramCard> shuffledHand = new ArrayList<>(hand);
+                Collections.shuffle(shuffledHand);
                 int needed = 5 - robot.getBlockedSlots();
-                for (int i = 0; i < Math.min(needed, hand.size()); i++) {
-                    robot.setSlot(i, hand.get(i));
+                List<ProgramCard> autoProgram = new ArrayList<>();
+                for (int i = 0; i < Math.min(needed, shuffledHand.size()); i++) {
+                    ProgramCard selectedCard = shuffledHand.get(i);
+                    robot.setSlot(i, selectedCard);
+                    autoProgram.add(selectedCard);
                 }
+                for (ProgramCard card : hand) {
+                    if (!autoProgram.contains(card)) {
+                        game.getDiscardPile().add(card);
+                    }
+                }
+                game.getPlayerHands().remove(robot.getPlayerId());
                 game.markSubmitted(robot.getPlayerId());
                 log.info("Auto-submitted random program for player {}", robot.getPlayerId());
             }
