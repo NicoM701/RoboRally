@@ -375,3 +375,23 @@ test('game over messages are still accepted during cleanup for the current game'
 
     assert.equal(hooks.shouldAcceptGameOver(gameMessage()), true);
 });
+
+test('unexpected disconnect clears stale lobby and game state before reconnect can leave the UI stranded', () => {
+    const hooks = loadAppHooks();
+
+    hooks.setState({
+        currentUser: { userId: 2, username: 'Gast_2' },
+        currentLobby: { id: 'fresh-lobby' },
+        currentScreen: 'game',
+        gameState: activeGameState(),
+        executionPlayback: { queue: [], isPlaying: false }
+    });
+
+    hooks.handleUnexpectedDisconnect();
+
+    const state = hooks.getState();
+    assert.equal(state.currentUser, null);
+    assert.equal(state.currentScreen, 'login');
+    assert.equal(state.currentLobby, null);
+    assert.equal(state.gameState, null);
+});

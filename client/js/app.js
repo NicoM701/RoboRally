@@ -60,12 +60,18 @@ const App = (() => {
 
     function showAuthMessage(text, isError = true) {
         const el = document.getElementById('auth-message');
+        if (!el) {
+            return;
+        }
         el.textContent = text;
         el.className = `auth-message ${isError ? 'error' : 'success'}`;
     }
 
     function hideAuthMessage() {
         const el = document.getElementById('auth-message');
+        if (!el) {
+            return;
+        }
         el.className = 'auth-message hidden';
     }
 
@@ -92,6 +98,31 @@ const App = (() => {
 
     function returnToHomeScreen() {
         showScreen(currentUser ? 'menu' : 'login');
+    }
+
+    function handleUnexpectedDisconnect() {
+        if (!currentUser) {
+            return;
+        }
+
+        currentUser = null;
+        joiningLobbyId = null;
+        exitingLobbyId = null;
+        resetLobbyAndGameState();
+        currentScreen = 'login';
+        showScreen('login');
+
+        const usernameInput = document.getElementById('login-username');
+        if (usernameInput) {
+            usernameInput.value = '';
+        }
+
+        const passwordInput = document.getElementById('login-password');
+        if (passwordInput) {
+            passwordInput.value = '';
+        }
+
+        showAuthMessage('Verbindung verloren. Bitte erneut anmelden.');
     }
 
     function leaveCurrentLobby({ requestLobbyList = false } = {}) {
@@ -605,6 +636,10 @@ const App = (() => {
             updateMapSelects();
         });
 
+        RoboSocket.on('disconnected', () => {
+            handleUnexpectedDisconnect();
+        });
+
         // Reconnect
         RoboSocket.on('connected', () => {
             if (currentScreen === 'menu' && currentUser) {
@@ -944,9 +979,7 @@ const App = (() => {
     }
 
     function resetMatchPresentationState() {
-        dealtCards = [];
-        selectedCards = [];
-        blockedSlots = 0;
+        clearRoundState();
         submittedProgramPreview = [];
         gameEventLog = [];
         programmingState = createProgrammingState();
@@ -2101,6 +2134,7 @@ const App = (() => {
     if (typeof globalThis !== 'undefined' && globalThis.__APP_TEST_HOOKS__) {
         api.__testHooks = {
             resetGamePresentation,
+            handleUnexpectedDisconnect,
             queueExecutionStep,
             shouldAcceptGameState,
             shouldAcceptExecutionStep,
@@ -2128,6 +2162,14 @@ const App = (() => {
             },
             getExecutionPlaybackState() {
                 return executionPlayback;
+            },
+            getState() {
+                return {
+                    currentUser,
+                    currentScreen,
+                    currentLobby,
+                    gameState
+                };
             }
         };
     }
