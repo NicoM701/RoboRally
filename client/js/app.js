@@ -1188,6 +1188,10 @@ const App = (() => {
         return Math.max(0, 5 - blockedSlots);
     }
 
+    function isRotationCard(card) {
+        return ['TURN_LEFT', 'TURN_RIGHT', 'U_TURN'].includes(card?.type);
+    }
+
     function getLocalProgramStatus() {
         const requiredCards = getRequiredCardCount();
 
@@ -1208,6 +1212,15 @@ const App = (() => {
         }
 
         if (dealtCards.length) {
+            const firstSelectedCard = dealtCards.find(card => card.id === selectedCards[0]);
+            if (firstSelectedCard && isRotationCard(firstSelectedCard)) {
+                return {
+                    label: 'Startkarte ungültig',
+                    detail: 'Die erste Karte darf keine Rotationskarte sein.',
+                    tone: 'warning'
+                };
+            }
+
             if (selectedCards.length === requiredCards) {
                 return {
                     label: 'Bereit zum Einreichen',
@@ -1831,6 +1844,11 @@ const App = (() => {
         }
         if (selectedCards.length !== 5 - blockedSlots) {
             toast('Wähle erst die richtige Anzahl Karten!', 'error');
+            return;
+        }
+        const firstSelectedCard = dealtCards.find(card => card.id === selectedCards[0]);
+        if (firstSelectedCard && isRotationCard(firstSelectedCard)) {
+            toast('Die erste Karte darf keine Rotationskarte sein.', 'error');
             return;
         }
         programmingState.submitPending = true;

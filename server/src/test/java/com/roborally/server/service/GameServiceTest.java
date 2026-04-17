@@ -323,6 +323,25 @@ class GameServiceTest {
     }
 
     @Test
+    void submitProgram_fullyLockedRobot_acceptsEmptySelection() {
+        GameState game = startTestGame();
+        Robot robot = game.getRobot(1L);
+        robot.addDamage(9);
+        for (int i = 0; i < 5; i++) {
+            robot.setSlot(i, new ProgramCard(50 + i, CardType.MOVE_1, 100 + i));
+        }
+        game.getPlayerHands().put(1L, List.of());
+        when(lobbyService.getLobbyByUserId(1L)).thenReturn(lobby);
+        when(cardService.validateProgram(any(), any(), any(), anyInt())).thenReturn(null);
+        when(userService.getSessionIdByUserId(1L)).thenReturn("session-1");
+
+        assertDoesNotThrow(() -> gameService.submitProgram(1L, List.of()));
+
+        assertTrue(game.getSubmittedPlayers().contains(1L));
+        assertEquals(54, robot.getSlot(4).getId());
+    }
+
+    @Test
     void submitProgram_validationFails_throws() {
         GameState game = startTestGame();
         game.getPlayerHands().put(1L, createMockHand());
@@ -689,6 +708,51 @@ class GameServiceTest {
         assertEquals(8, game.getDiscardPile().size());
         assertNotNull(game.getRobot(1L).getSlot(0));
         assertNotNull(game.getRobot(2L).getSlot(0));
+        assertTrue(game.getRobot(1L).getSlot(0).getType().isMovement());
+        assertTrue(game.getRobot(2L).getSlot(0).getType().isMovement());
+    }
+
+    @Test
+    void autoSubmitMissing_marksFullyLockedPlayersSubmittedWithoutCards() {
+        GameState game = startTestGame();
+        Robot robot = game.getRobot(1L);
+        robot.addDamage(9);
+        for (int i = 0; i < 5; i++) {
+            robot.setSlot(i, new ProgramCard(100 + i, CardType.MOVE_1, 1000 + i));
+        }
+        game.getPlayerHands().put(1L, List.of());
+        game.clearSubmissions();
+
+        invokeAutoSubmitMissing(game);
+
+        assertTrue(game.getSubmittedPlayers().contains(1L));
+        assertFalse(game.getPlayerHands().containsKey(1L));
+        assertEquals(CardType.MOVE_1, robot.getSlot(0).getType());
+    }
+
+    @Test
+    void startDealPhase_fullyLockedRobotIsAutoSubmittedImmediately() {
+        GameState game = startTestGame();
+        Robot lockedRobot = game.getRobot(1L);
+        lockedRobot.addDamage(9);
+        for (int i = 0; i < 5; i++) {
+            lockedRobot.setSlot(i, new ProgramCard(200 + i, CardType.MOVE_1, 1200 + i));
+        }
+        when(cardService.deal(any(), any(), any())).thenAnswer(invocation -> {
+            Robot robot = invocation.getArgument(2);
+            return robot.getPlayerId().equals(1L) ? List.of() : createMockHand();
+        });
+        when(cardService.validateProgram(any(), any(), any(), anyInt())).thenReturn(null);
+        when(userService.getSessionIdByUserId(anyLong())).thenReturn("session-1");
+        when(lobbyService.getLobbyByUserId(anyLong())).thenReturn(lobby);
+
+        invokeStartDealPhase(game, false);
+
+        assertTrue(game.getSubmittedPlayers().contains(1L));
+
+        gameService.submitProgram(2L, List.of(1, 2, 3, 4, 5));
+
+        verify(movementService, atLeast(5)).executeStep(any(), anyInt());
     }
 
     @Test
@@ -810,6 +874,16 @@ class GameServiceTest {
             Method method = GameService.class.getDeclaredMethod("autoSubmitMissing", GameState.class);
             method.setAccessible(true);
             method.invoke(gameService, game);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    private void invokeStartDealPhase(GameState game, boolean timerEnabled) {
+        try {
+            Method method = GameService.class.getDeclaredMethod("startDealPhase", GameState.class, boolean.class);
+            method.setAccessible(true);
+            method.invoke(gameService, game, timerEnabled);
         } catch (ReflectiveOperationException e) {
             throw new AssertionError(e);
         }

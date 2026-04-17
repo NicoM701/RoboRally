@@ -138,9 +138,11 @@ public class CardService {
                 return "Karte nicht in der Hand.";
         }
 
-        // First card of first round must be a movement card
-        if (round == 1 && program.get(0) != null && program.get(0).getType().isRotation()) {
-            return "Die erste Karte in Runde 1 muss eine Bewegungskarte sein.";
+        // The first programmed card may never be a pure rotation.
+        if (program.get(0) != null && program.get(0).getType().isRotation()) {
+            return round == 1
+                    ? "Die erste Karte in Runde 1 darf keine Rotationskarte sein."
+                    : "Die erste Karte darf keine Rotationskarte sein.";
         }
 
         return null; // Valid

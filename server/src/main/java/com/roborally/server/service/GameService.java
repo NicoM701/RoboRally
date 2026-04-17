@@ -182,12 +182,22 @@ public class GameService {
             game.getPlayerHands().put(robot.getPlayerId(), hand);
         }
 
+        List<Long> autoSubmittedPlayers = new ArrayList<>();
+        for (Robot robot : game.getActiveRobots()) {
+            if (5 - robot.getBlockedSlots() <= 0) {
+                game.getPlayerHands().remove(robot.getPlayerId());
+                game.markSubmitted(robot.getPlayerId());
+                autoSubmittedPlayers.add(robot.getPlayerId());
+                log.info("Auto-submitted fully locked robot {} for round {}", robot.getPlayerId(), game.getRound());
+            }
+        }
+
         // Move to programming phase and start the real timer before broadcasting
         game.setPhase(GamePhase.PROGRAMMING);
-        Long deadlineEpochMs = timerEnabled
-                ? startProgrammingTimer(game, timerSeconds)
-                : null;
-        if (!timerEnabled) {
+        Long deadlineEpochMs = null;
+        if (timerEnabled && !game.allSubmitted()) {
+            deadlineEpochMs = startProgrammingTimer(game, timerSeconds);
+        } else {
             cancelTimer(game.getLobbyId());
         }
 
@@ -220,9 +230,20 @@ public class GameService {
         }
 
         broadcastProgrammingPhaseStart(game, timerEnabled, timerSeconds, deadlineEpochMs, null, null);
+        for (Long autoSubmittedPlayerId : autoSubmittedPlayers) {
+            sendGameMessageToPlayer(game, autoSubmittedPlayerId, Message.of(MessageType.PROGRAMMING_PHASE_START, Map.of(
+                    "status", "submitted",
+                    "message", "Alle Register sind blockiert, dein gespeichertes Programm bleibt aktiv.",
+                    "lobbyId", game.getLobbyId(),
+                    "gameInstanceId", game.getGameInstanceId())));
+        }
         broadcastPhaseUpdate(game, "PROGRAMMING");
 
         log.info("Round {} started - cards dealt to {} players", game.getRound(), game.getActiveRobots().size());
+
+        if (game.allSubmitted()) {
+            startExecutionPhase(game);
+        }
     }
 
     /**
@@ -245,15 +266,19 @@ public class GameService {
         if (robot == null || robot.isDestroyed())
             throw new IllegalArgumentException("Dein Roboter ist nicht aktiv.");
 
+        int blockedSlots = robot.getBlockedSlots();
+        int openSlots = 5 - blockedSlots;
         List<ProgramCard> hand = game.getHand(playerId);
-        if (hand.isEmpty())
+        if (hand == null) {
+            hand = List.of();
+        }
+        if (openSlots > 0 && hand.isEmpty())
             throw new IllegalArgumentException("Keine Karten erhalten.");
 
         // Map card IDs to actual cards
         List<ProgramCard> program = new ArrayList<>();
-        int blockedSlots = robot.getBlockedSlots();
 
-        for (int i = 0; i < 5 - blockedSlots; i++) {
+        for (int i = 0; i < openSlots; i++) {
             if (i >= cardIds.size())
                 throw new IllegalArgumentException("Nicht genug Karten ausgewählt.");
             int cardId = cardIds.get(i);
@@ -263,7 +288,7 @@ public class GameService {
             program.add(card);
         }
         // Add blocked cards from previous rounds
-        for (int i = 5 - blockedSlots; i < 5; i++) {
+        for (int i = openSlots; i < 5; i++) {
             program.add(robot.getSlot(i));
         }
 
@@ -565,12 +590,25 @@ public class GameService {
         for (Robot robot : game.getActiveRobots()) {
             if (!game.getSubmittedPlayers().contains(robot.getPlayerId())) {
                 List<ProgramCard> hand = game.getHand(robot.getPlayerId());
-                if (hand == null || hand.isEmpty())
+                int needed = 5 - robot.getBlockedSlots();
+                if (needed <= 0 || hand == null || hand.isEmpty()) {
+                    game.getPlayerHands().remove(robot.getPlayerId());
+                    game.markSubmitted(robot.getPlayerId());
+                    log.info("Auto-submitted locked program for player {} without open cards", robot.getPlayerId());
                     continue;
+                }
 
                 List<ProgramCard> shuffledHand = new ArrayList<>(hand);
                 Collections.shuffle(shuffledHand);
-                int needed = 5 - robot.getBlockedSlots();
+                if (needed > 0 && shuffledHand.get(0).getType().isRotation()) {
+                    for (int i = 1; i < shuffledHand.size(); i++) {
+                        if (shuffledHand.get(i).getType().isMovement()) {
+                            Collections.swap(shuffledHand, 0, i);
+                            break;
+                        }
+                    }
+                }
+
                 List<ProgramCard> autoProgram = new ArrayList<>();
                 for (int i = 0; i < Math.min(needed, shuffledHand.size()); i++) {
                     ProgramCard selectedCard = shuffledHand.get(i);

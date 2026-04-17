@@ -154,6 +154,27 @@ class CardServiceTest {
     }
 
     @Test
+    @DisplayName("Validate: first programmed card cannot be a rotation card")
+    void validate_rotationAsFirstCard_rejected() {
+        Robot robot = new Robot(1L, 0, 0, 0, Direction.NORTH);
+        List<ProgramCard> hand = List.of(
+                new ProgramCard(0, CardType.TURN_LEFT, 100),
+                new ProgramCard(1, CardType.MOVE_1, 500),
+                new ProgramCard(2, CardType.MOVE_2, 700),
+                new ProgramCard(3, CardType.TURN_RIGHT, 200),
+                new ProgramCard(4, CardType.MOVE_3, 800),
+                new ProgramCard(5, CardType.BACKUP, 430),
+                new ProgramCard(6, CardType.U_TURN, 10),
+                new ProgramCard(7, CardType.MOVE_1, 510),
+                new ProgramCard(8, CardType.MOVE_1, 520));
+        List<ProgramCard> program = List.of(hand.get(0), hand.get(1), hand.get(2), hand.get(3), hand.get(4));
+
+        String error = cardService.validateProgram(robot, program, hand, 2);
+
+        assertEquals("Die erste Karte darf keine Rotationskarte sein.", error);
+    }
+
+    @Test
     @DisplayName("Validate: wrong size → error")
     void validate_wrongSize() {
         Robot robot = new Robot(1L, 0, 0, 0, Direction.NORTH);
@@ -161,6 +182,40 @@ class CardServiceTest {
         String error = cardService.validateProgram(robot, List.of(), List.of(), 1);
 
         assertNotNull(error);
+    }
+
+    @Test
+    @DisplayName("Validate: first card rotation is rejected in later rounds too")
+    void validate_firstCardRotationRejectedEveryRound() {
+        Robot robot = new Robot(1L, 0, 0, 0, Direction.NORTH);
+        List<ProgramCard> hand = List.of(
+                new ProgramCard(0, CardType.TURN_LEFT, 100),
+                new ProgramCard(1, CardType.MOVE_2, 700),
+                new ProgramCard(2, CardType.MOVE_1, 500),
+                new ProgramCard(3, CardType.TURN_RIGHT, 200),
+                new ProgramCard(4, CardType.MOVE_3, 800));
+        List<ProgramCard> program = new ArrayList<>(hand);
+
+        String error = cardService.validateProgram(robot, program, hand, 3);
+
+        assertEquals("Die erste Karte darf keine Rotationskarte sein.", error);
+    }
+
+    @Test
+    @DisplayName("Validate: backup as first card stays valid")
+    void validate_backupFirstCardAllowed() {
+        Robot robot = new Robot(1L, 0, 0, 0, Direction.NORTH);
+        List<ProgramCard> hand = List.of(
+                new ProgramCard(0, CardType.BACKUP, 430),
+                new ProgramCard(1, CardType.MOVE_2, 700),
+                new ProgramCard(2, CardType.MOVE_1, 500),
+                new ProgramCard(3, CardType.TURN_RIGHT, 200),
+                new ProgramCard(4, CardType.MOVE_3, 800));
+        List<ProgramCard> program = new ArrayList<>(hand);
+
+        String error = cardService.validateProgram(robot, program, hand, 2);
+
+        assertNull(error);
     }
 
     // ─── Collect Used Cards ─────────────────────────────
