@@ -55,20 +55,25 @@ public class SessionManager {
      * Send a message to a specific WebSocketSession.
      */
     public void sendMessage(WebSocketSession session, Message message) {
-        if (session == null || !session.isOpen()) {
+        if (session == null) {
+            return;
+        }
+
+        WebSocketSession targetSession = sessions.getOrDefault(session.getId(), session);
+        if (!targetSession.isOpen()) {
             return;
         }
 
         try {
             String json = objectMapper.writeValueAsString(message);
-            synchronized (session) {
-                if (!session.isOpen()) {
+            synchronized (targetSession) {
+                if (!targetSession.isOpen()) {
                     return;
                 }
-                session.sendMessage(new TextMessage(json));
+                targetSession.sendMessage(new TextMessage(json));
             }
         } catch (IOException | IllegalStateException e) {
-            log.error("Failed to send message to session {}: {}", session.getId(), e.getMessage());
+            log.error("Failed to send message to session {}: {}", targetSession.getId(), e.getMessage());
         }
     }
 
