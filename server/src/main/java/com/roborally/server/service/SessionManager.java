@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
+import org.springframework.web.socket.handler.ConcurrentWebSocketSessionDecorator;
 
 import java.io.IOException;
 import java.util.Map;
@@ -28,7 +29,8 @@ public class SessionManager {
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
 
     public void addSession(WebSocketSession session) {
-        sessions.put(session.getId(), session);
+        WebSocketSession safeSession = new ConcurrentWebSocketSessionDecorator(session, 10_000, 512 * 1024);
+        sessions.put(session.getId(), safeSession);
         log.info("Session connected: {}", session.getId());
     }
 
@@ -46,27 +48,27 @@ public class SessionManager {
      */
     public void sendMessage(String sessionId, Message message) {
         WebSocketSession session = sessions.get(sessionId);
-        if (session != null && session.isOpen()) {
-            try {
-                String json = objectMapper.writeValueAsString(message);
-                session.sendMessage(new TextMessage(json));
-            } catch (IOException e) {
-                log.error("Failed to send message to session {}: {}", sessionId, e.getMessage());
-            }
-        }
+        sendMessage(session, message);
     }
 
     /**
      * Send a message to a specific WebSocketSession.
      */
     public void sendMessage(WebSocketSession session, Message message) {
-        if (session != null && session.isOpen()) {
-            try {
-                String json = objectMapper.writeValueAsString(message);
+        if (session == null || !session.isOpen()) {
+            return;
+        }
+
+        try {
+            String json = objectMapper.writeValueAsString(message);
+            synchronized (session) {
+                if (!session.isOpen()) {
+                    return;
+                }
                 session.sendMessage(new TextMessage(json));
-            } catch (IOException e) {
-                log.error("Failed to send message to session {}: {}", session.getId(), e.getMessage());
             }
+        } catch (IOException | IllegalStateException e) {
+            log.error("Failed to send message to session {}: {}", session.getId(), e.getMessage());
         }
     }
 
